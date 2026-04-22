@@ -15,6 +15,19 @@ pub enum SorryError {
     TurnLimitExceeded,
     /// A proposed move is not in the legal-move set for the current card.
     IllegalMove,
+
+    // ─── Interactive-play variants ──────────────────────────────────────
+    /// Caller attempted to act on behalf of a player whose turn it isn't.
+    NotYourTurn { expected: PlayerId, got: PlayerId },
+    /// The `PlayerAction` variant doesn't match the pending `ActionNeeded`.
+    UnexpectedAction {
+        expected: &'static str,
+        got: &'static str,
+    },
+    /// `ChooseCard` hand_index is out of range for the current hand.
+    InvalidHandIndex { got: usize, hand_size: usize },
+    /// `ChooseCard` hand_index not in `legal_card_indices`.
+    IllegalCardChoice,
 }
 
 impl std::fmt::Display for SorryError {
@@ -36,6 +49,16 @@ impl std::fmt::Display for SorryError {
             Self::GameAlreadyOver => write!(f, "game is already over"),
             Self::TurnLimitExceeded => write!(f, "turn limit exceeded"),
             Self::IllegalMove => write!(f, "move is not in the legal set"),
+            Self::NotYourTurn { expected, got } => {
+                write!(f, "not your turn: expected {expected:?}, got {got:?}")
+            }
+            Self::UnexpectedAction { expected, got } => {
+                write!(f, "unexpected action: expected {expected}, got {got}")
+            }
+            Self::InvalidHandIndex { got, hand_size } => {
+                write!(f, "invalid hand index {got} (hand size {hand_size})")
+            }
+            Self::IllegalCardChoice => write!(f, "chosen card index is not legal"),
         }
     }
 }

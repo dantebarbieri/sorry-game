@@ -19,6 +19,7 @@ pub(crate) mod engine;
 pub mod error;
 pub mod game;
 pub mod history;
+pub mod interactive;
 pub mod moves;
 pub mod rules;
 pub mod strategies;
@@ -29,6 +30,9 @@ pub use card::{Card, standard_deck};
 pub use error::{Result, SorryError};
 pub use game::Game;
 pub use history::{Action, GameHistory, TurnRecord};
+pub use interactive::{
+    ActionNeeded, InteractiveGame, InteractiveGameState, PlayerAction, PlayerView,
+};
 pub use moves::{BumpEvent, Move, SlideEvent, SplitLeg, apply_move, legal_moves};
 pub use rules::{Rules, SlidePath, StandardRules};
 pub use strategies::RandomStrategy;
