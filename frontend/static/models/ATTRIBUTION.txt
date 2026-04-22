@@ -1,0 +1,7 @@
+Game_Piece_mm.glb
+
+Source:  "Sorry - Board Game Piece" by 3P3D on Thingiverse
+URL:     https://www.thingiverse.com/thing:84406
+License: Creative Commons — Attribution (CC BY)
+
+Attribution must travel with any distribution of this model or derivatives.
