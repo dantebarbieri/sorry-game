@@ -1,5 +1,5 @@
 [workspace]
-members = ["sorry-core"]
+members = ["sorry-core", "sorry-wasm", "sorry-server"]
 resolver = "3"
 
 [profile.release]
