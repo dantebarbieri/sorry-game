@@ -22,6 +22,7 @@ pub mod history;
 pub mod interactive;
 pub mod moves;
 pub mod rules;
+pub mod simulator;
 pub mod strategies;
 pub mod strategy;
 
@@ -35,5 +36,6 @@ pub use interactive::{
 };
 pub use moves::{BumpEvent, Move, SlideEvent, SplitLeg, apply_move, legal_moves};
 pub use rules::{Rules, SlidePath, StandardRules};
+pub use simulator::{AggregateStats, GameStats, Simulator, SimulatorConfig};
 pub use strategies::RandomStrategy;
 pub use strategy::{Complexity, Strategy, StrategyDescription, StrategyView};
