@@ -18,6 +18,7 @@ pub mod card;
 pub(crate) mod engine;
 pub mod error;
 pub mod game;
+pub mod geometry;
 pub mod history;
 pub mod interactive;
 pub mod moves;
@@ -30,6 +31,7 @@ pub use board::{BoardState, PawnId, PlayerId, Space, SpaceId};
 pub use card::{Card, standard_deck};
 pub use error::{Result, SorryError};
 pub use game::Game;
+pub use geometry::{BoardGeometry, PlayerLayout, SlideLayout, SpaceLayout};
 pub use history::{Action, GameHistory, TurnRecord};
 pub use interactive::{
     ActionNeeded, InteractiveGame, InteractiveGameState, PlayerAction, PlayerView,

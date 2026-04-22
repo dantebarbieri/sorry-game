@@ -79,6 +79,11 @@ pub struct InteractiveGameState {
     pub winners: Vec<PlayerId>,
     pub truncated: bool,
     pub turn_count: usize,
+    /// Turn currently being assembled — actions accumulate here and only
+    /// flush into `history.turns` when the turn ends (which is *after*
+    /// an extra-turn chain completes). Exposing it lets clients see the
+    /// most recent `Action::Play` that hasn't been finalized yet.
+    pub current_turn: Option<TurnRecord>,
 }
 
 /// Per-player snapshot — hides other players' persistent hands and the
@@ -343,6 +348,7 @@ impl InteractiveGame {
             winners: self.history.winners.clone(),
             truncated: self.history.truncated,
             turn_count: self.history.turns.len(),
+            current_turn: self.current_turn.clone(),
         }
     }
 

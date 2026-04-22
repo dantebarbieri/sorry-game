@@ -10,6 +10,7 @@ use rand::seq::SliceRandom;
 
 use crate::board::{BoardState, PlayerId, Space, SpaceId};
 use crate::card::{Card, standard_deck};
+use crate::geometry::{BoardGeometry, PlayerLayout, SlideLayout, SpaceLayout};
 
 /// Resolved slide effect — the destination and every space the sliding pawn
 /// traverses after leaving the slide head. The head itself is the `from`
@@ -55,6 +56,11 @@ pub trait Rules: Send + Sync {
     fn start_exit(&self, player: PlayerId) -> SpaceId;
     fn home(&self, player: PlayerId) -> SpaceId;
 
+    /// Publish a normalized `[-1, 1]` layout for every `SpaceId` on this
+    /// board, plus per-player adjacency and slide data. One-shot snapshot —
+    /// immutable for the life of a game; consumed by the renderer.
+    fn board_geometry(&self) -> BoardGeometry;
+
     // Card semantics (per-card, so variants can remap).
     fn forward_steps(&self, card: Card) -> Option<i8>;
     fn backward_steps(&self, card: Card) -> Option<i8>;
@@ -62,7 +68,12 @@ pub trait Rules: Send + Sync {
     fn split_total(&self, card: Card) -> Option<u8>;
     fn is_sorry(&self, card: Card) -> bool;
     fn is_swap(&self, card: Card) -> bool;
-    fn can_start_pawn(&self, card: Card) -> bool;
+    /// Extra forward steps a pawn takes after exiting Start when this card
+    /// is played. `None` means the card cannot start a pawn; `Some(0)`
+    /// means the pawn lands on `start_exit`; `Some(n)` advances `n` spaces
+    /// past `start_exit`. Every space on the path must be clear of the
+    /// player's own pawns for the start to be legal.
+    fn start_pawn_advance(&self, card: Card) -> Option<u32>;
     fn grants_extra_turn(&self, card: Card) -> bool;
 
     fn starting_player(&self, num_players: usize, rng: &mut dyn RngCore) -> PlayerId;
@@ -280,6 +291,200 @@ impl Rules for StandardRules {
         home_id(player)
     }
 
+    fn board_geometry(&self) -> BoardGeometry {
+        // Square board: tracks run along the perimeter of a [-0.9, 0.9] box
+        // inside the [-1, 1] layout square. Safety zones run inward from each
+        // side's safety entry (track s*15+2). Each side's colors belong to
+        // `PlayerId(s)`.
+        //
+        //   Side 0: bottom edge, moving +x (tangent 0°)
+        //   Side 1: right  edge, moving +y (tangent 90°)
+        //   Side 2: top    edge, moving -x (tangent 180°)
+        //   Side 3: left   edge, moving -y (tangent 270°)
+        struct SideGeom {
+            corner: (f32, f32), // start corner where this side's track begins
+            edge: (f32, f32),   // unit vector along the edge, direction of travel
+            inward: (f32, f32), // unit vector perpendicular to edge, toward board center
+            tangent_deg: f32,
+        }
+        let sides: [SideGeom; 4] = [
+            SideGeom {
+                corner: (-0.9, -0.9),
+                edge: (1.0, 0.0),
+                inward: (0.0, 1.0),
+                tangent_deg: 0.0,
+            },
+            SideGeom {
+                corner: (0.9, -0.9),
+                edge: (0.0, 1.0),
+                inward: (-1.0, 0.0),
+                tangent_deg: 90.0,
+            },
+            SideGeom {
+                corner: (0.9, 0.9),
+                edge: (-1.0, 0.0),
+                inward: (0.0, -1.0),
+                tangent_deg: 180.0,
+            },
+            SideGeom {
+                corner: (-0.9, 0.9),
+                edge: (0.0, -1.0),
+                inward: (1.0, 0.0),
+                tangent_deg: 270.0,
+            },
+        ];
+        let edge_len: f32 = 1.8;
+        let safety_step: f32 = 0.09;
+        let safety_first_depth: f32 = 0.13;
+        let start_depth: f32 = 0.22;
+        // Start sits directly inward from `start_exit` (track `s*15+4`), so
+        // a pawn leaving Start is perpendicular to its exit tile — matches
+        // the physical Sorry! board's Start pocket layout.
+        let start_t: f32 = 4.0 / SIDE_LEN as f32;
+
+        // Local fraction along a side for the `i`-th (0-indexed) track
+        // space. Using `i / SIDE_LEN` places the 15 spaces at 0..14/15 of
+        // the edge, so the *first* tile of side `s` sits exactly at side
+        // `s`'s starting corner — the corner where side `s-1` hands off.
+        // That corner tile doubles as the visual board corner and keeps the
+        // short/long slide heads (track_s*15+1, +9) a full tile further from
+        // the corner than they would be with the last-tile-at-corner layout.
+        let track_local_t = |i: u32| -> f32 { i as f32 / SIDE_LEN as f32 };
+        let track_center = |s: usize, i: u32| -> [f32; 2] {
+            let side = &sides[s];
+            let t = track_local_t(i);
+            [
+                side.corner.0 + side.edge.0 * t * edge_len,
+                side.corner.1 + side.edge.1 * t * edge_len,
+            ]
+        };
+
+        let adjacency = |id: SpaceId| -> (Vec<Option<SpaceId>>, Vec<Option<SpaceId>>) {
+            let mut fwd = Vec::with_capacity(NUM_SIDES as usize);
+            let mut bwd = Vec::with_capacity(NUM_SIDES as usize);
+            for p in 0..NUM_SIDES as u8 {
+                fwd.push(self.forward_neighbor(id, PlayerId(p)));
+                bwd.push(self.backward_neighbor(id, PlayerId(p)));
+            }
+            (fwd, bwd)
+        };
+
+        let mut spaces: Vec<SpaceLayout> = Vec::with_capacity(88);
+
+        // Tracks (0..60) — iterate in SpaceId order so `spaces` matches `spaces()`.
+        for (s, side) in sides.iter().enumerate() {
+            for i in 0..SIDE_LEN {
+                let id = track_id(s as u32 * SIDE_LEN + i);
+                let (forward, backward) = adjacency(id);
+                let t = track_local_t(i);
+                spaces.push(SpaceLayout {
+                    id,
+                    kind: Space::Track(s as u32 * SIDE_LEN + i),
+                    center: [
+                        side.corner.0 + side.edge.0 * t * edge_len,
+                        side.corner.1 + side.edge.1 * t * edge_len,
+                    ],
+                    tangent_deg: side.tangent_deg,
+                    forward,
+                    backward,
+                });
+            }
+        }
+
+        // Start areas (60..64)
+        for s in 0..NUM_SIDES as u8 {
+            let side = &sides[s as usize];
+            let cx = side.corner.0 + side.edge.0 * start_t * edge_len + side.inward.0 * start_depth;
+            let cy = side.corner.1 + side.edge.1 * start_t * edge_len + side.inward.1 * start_depth;
+            let id = start_area_id(PlayerId(s));
+            let (forward, backward) = adjacency(id);
+            spaces.push(SpaceLayout {
+                id,
+                kind: Space::StartArea(PlayerId(s)),
+                center: [cx, cy],
+                tangent_deg: sides[s as usize].tangent_deg,
+                forward,
+                backward,
+            });
+        }
+
+        // Safety zones (64..84) — 5 slots per player, inward from track s*15+2.
+        for s in 0..NUM_SIDES as u8 {
+            let side = &sides[s as usize];
+            let entry = track_center(s as usize, 2);
+            let inward_tangent = (sides[s as usize].tangent_deg + 90.0) % 360.0;
+            for slot in 0..SAFETY_LEN {
+                let depth = safety_first_depth + (slot as f32) * safety_step;
+                let cx = entry[0] + side.inward.0 * depth;
+                let cy = entry[1] + side.inward.1 * depth;
+                let id = safety_id(PlayerId(s), slot);
+                let (forward, backward) = adjacency(id);
+                spaces.push(SpaceLayout {
+                    id,
+                    kind: Space::Safety(PlayerId(s), slot),
+                    center: [cx, cy],
+                    tangent_deg: inward_tangent,
+                    forward,
+                    backward,
+                });
+            }
+        }
+
+        // Homes (84..88) — one step further inward from safety slot 4.
+        for s in 0..NUM_SIDES as u8 {
+            let side = &sides[s as usize];
+            let entry = track_center(s as usize, 2);
+            let depth = safety_first_depth + (SAFETY_LEN as f32) * safety_step + 0.05;
+            let cx = entry[0] + side.inward.0 * depth;
+            let cy = entry[1] + side.inward.1 * depth;
+            let id = home_id(PlayerId(s));
+            let (forward, backward) = adjacency(id);
+            spaces.push(SpaceLayout {
+                id,
+                kind: Space::Home(PlayerId(s)),
+                center: [cx, cy],
+                tangent_deg: (sides[s as usize].tangent_deg + 90.0) % 360.0,
+                forward,
+                backward,
+            });
+        }
+
+        // Slides — short (head +1) and long (head +9) per side. Query
+        // slide_destination from any non-owner to extract the path.
+        let mut slides: Vec<SlideLayout> = Vec::with_capacity(8);
+        for s in 0..NUM_SIDES as u8 {
+            let owner = PlayerId(s);
+            let victim = PlayerId((s + 1) % NUM_SIDES as u8);
+            for head_offset in [1u32, 9u32] {
+                let head = track_id(s as u32 * SIDE_LEN + head_offset);
+                if let Some(path) = self.slide_destination(head, victim) {
+                    slides.push(SlideLayout {
+                        head,
+                        end: path.end,
+                        path: path.traversed,
+                        owner,
+                    });
+                }
+            }
+        }
+
+        let players = (0..NUM_SIDES as u8)
+            .map(|s| PlayerLayout {
+                player: PlayerId(s),
+                start_area: start_area_id(PlayerId(s)),
+                start_exit: track_id(s as u32 * SIDE_LEN + 4),
+                home: home_id(PlayerId(s)),
+            })
+            .collect();
+
+        BoardGeometry {
+            bounds: [-1.0, -1.0, 1.0, 1.0],
+            spaces,
+            slides,
+            players,
+        }
+    }
+
     fn forward_steps(&self, card: Card) -> Option<i8> {
         match card {
             Card::One => Some(1),
@@ -318,8 +523,16 @@ impl Rules for StandardRules {
     fn is_swap(&self, card: Card) -> bool {
         matches!(card, Card::Eleven)
     }
-    fn can_start_pawn(&self, card: Card) -> bool {
-        matches!(card, Card::One | Card::Two)
+    fn start_pawn_advance(&self, card: Card) -> Option<u32> {
+        match card {
+            // A 1 drops the pawn on start_exit.
+            Card::One => Some(0),
+            // A 2 drops the pawn on start_exit and then one more space
+            // forward. Classic Sorry! rule — and the 2 also grants an
+            // extra turn, handled by `grants_extra_turn`.
+            Card::Two => Some(1),
+            _ => None,
+        }
     }
     fn grants_extra_turn(&self, card: Card) -> bool {
         matches!(card, Card::Two)
@@ -436,5 +649,146 @@ mod tests {
             .expect("slide should trigger");
         assert_eq!(path.end, track_id(13));
         assert_eq!(path.traversed.len(), 4);
+    }
+
+    #[test]
+    fn board_geometry_has_88_spaces_in_canonical_order() {
+        let r = StandardRules::new();
+        let g = r.board_geometry();
+        assert_eq!(g.spaces.len(), 88);
+        // Tracks first, then StartAreas, then Safeties, then Homes — matches
+        // the ordering of `spaces()`.
+        for i in 0..60 {
+            assert_eq!(g.spaces[i].id, track_id(i as u32));
+            assert!(matches!(g.spaces[i].kind, Space::Track(_)));
+        }
+        for p in 0..4 {
+            assert!(matches!(g.spaces[60 + p].kind, Space::StartArea(_)));
+        }
+        for i in 64..84 {
+            assert!(matches!(g.spaces[i].kind, Space::Safety(_, _)));
+        }
+        for p in 0..4 {
+            assert!(matches!(g.spaces[84 + p].kind, Space::Home(_)));
+        }
+    }
+
+    #[test]
+    fn board_geometry_slide_count_is_eight() {
+        let r = StandardRules::new();
+        assert_eq!(r.board_geometry().slides.len(), 8);
+    }
+
+    #[test]
+    fn board_geometry_players_published() {
+        let r = StandardRules::new();
+        let g = r.board_geometry();
+        assert_eq!(g.players.len(), 4);
+        for s in 0..4u8 {
+            let p = &g.players[s as usize];
+            assert_eq!(p.player, PlayerId(s));
+            assert_eq!(p.start_area, start_area_id(PlayerId(s)));
+            assert_eq!(p.home, home_id(PlayerId(s)));
+            assert_eq!(p.start_exit, track_id(s as u32 * SIDE_LEN + 4));
+        }
+    }
+
+    #[test]
+    fn board_geometry_adjacency_matches_trait() {
+        let r = StandardRules::new();
+        let g = r.board_geometry();
+        // Per-space adjacency vectors are indexed by PlayerId.0 and must
+        // match `forward_neighbor` / `backward_neighbor` called directly.
+        for layout in &g.spaces {
+            for p in 0..4u8 {
+                assert_eq!(
+                    layout.forward[p as usize],
+                    r.forward_neighbor(layout.id, PlayerId(p)),
+                    "forward mismatch at space {:?} for player {p}",
+                    layout.kind
+                );
+                assert_eq!(
+                    layout.backward[p as usize],
+                    r.backward_neighbor(layout.id, PlayerId(p)),
+                    "backward mismatch at space {:?} for player {p}",
+                    layout.kind
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn board_geometry_track_centers_on_square_perimeter() {
+        let r = StandardRules::new();
+        let g = r.board_geometry();
+        // Side 0 (bottom): y = -0.9, x increasing.
+        let s0_track0 = &g.spaces[0];
+        assert!((s0_track0.center[1] - -0.9).abs() < 1e-5);
+        assert!(s0_track0.center[0] < 0.0);
+        assert!((s0_track0.tangent_deg - 0.0).abs() < 1e-5);
+        // Side 2 (top): y = +0.9, space index 30.
+        let s2_track0 = &g.spaces[30];
+        assert!((s2_track0.center[1] - 0.9).abs() < 1e-5);
+        assert!((s2_track0.tangent_deg - 180.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn board_geometry_bounds_are_unit_square() {
+        let r = StandardRules::new();
+        let g = r.board_geometry();
+        assert_eq!(g.bounds, [-1.0, -1.0, 1.0, 1.0]);
+        // Every space center lies within bounds.
+        for layout in &g.spaces {
+            assert!(layout.center[0] >= -1.0 && layout.center[0] <= 1.0);
+            assert!(layout.center[1] >= -1.0 && layout.center[1] <= 1.0);
+        }
+    }
+
+    #[test]
+    fn board_geometry_json_shape_is_frontend_friendly() {
+        // This test pins the serialized JSON shape so the TS mirror types in
+        // `frontend/src/lib/board/geometry.ts` stay in sync. Newtype structs
+        // (`SpaceId`, `PlayerId`) serialize transparently as their inner value.
+        let r = StandardRules::new();
+        let g = r.board_geometry();
+        let v = serde_json::to_value(&g).unwrap();
+        // Top-level keys
+        assert!(v.get("bounds").is_some());
+        assert!(v.get("spaces").is_some());
+        assert!(v.get("slides").is_some());
+        assert!(v.get("players").is_some());
+        // SpaceId is transparent: space.id is a bare number.
+        let s0 = &v["spaces"][0];
+        assert!(s0["id"].is_number(), "SpaceId should serialize as a number");
+        // Space enum uses default serde externally-tagged form: {"Track": 0} etc.
+        assert!(s0["kind"]["Track"].is_number());
+        // center is [x, y]
+        assert_eq!(s0["center"].as_array().unwrap().len(), 2);
+        // forward/backward are arrays of length 4 (one per player slot).
+        assert_eq!(s0["forward"].as_array().unwrap().len(), 4);
+        assert_eq!(s0["backward"].as_array().unwrap().len(), 4);
+        // PlayerLayout also uses transparent newtype serialization.
+        let p0 = &v["players"][0];
+        assert!(p0["player"].is_number());
+        assert!(p0["home"].is_number());
+        // Slide path is array of bare SpaceId numbers.
+        let slide0 = &v["slides"][0];
+        assert!(slide0["path"].as_array().unwrap()[0].is_number());
+        assert!(slide0["owner"].is_number());
+    }
+
+    #[test]
+    fn board_geometry_safety_chain_moves_inward() {
+        let r = StandardRules::new();
+        let g = r.board_geometry();
+        // Player 0 safety is on side 0 (bottom), inward = +y. Slot 4 must be
+        // strictly closer to board center (higher y) than slot 0.
+        let p = PlayerId(0);
+        let find = |s: SpaceId| g.spaces.iter().find(|l| l.id == s).unwrap();
+        let s0 = find(safety_id(p, 0)).center[1];
+        let s4 = find(safety_id(p, 4)).center[1];
+        let home = find(home_id(p)).center[1];
+        assert!(s4 > s0);
+        assert!(home > s4);
     }
 }

@@ -89,16 +89,36 @@ pub fn legal_moves(
     let start_area = rules.start_area(player);
     let start_exit = rules.start_exit(player);
 
-    // StartPawn (1 or 2).
-    if rules.can_start_pawn(card) && !is_own_pawn_at(board, player, start_exit) {
-        for pw in 0..num_pawns as u8 {
-            let pawn = PawnId(pw);
-            if board.position(player, pawn) == start_area {
-                out.push(Move::StartPawn {
-                    pawn,
-                    to: start_exit,
-                });
-                break; // all Start pawns are interchangeable; one canonical move
+    // StartPawn (1 or 2). `start_pawn_advance` tells us how many forward
+    // steps past `start_exit` the pawn must travel on exit — 0 for a 1, 1
+    // for a 2. Every space on the path (start_exit and any intermediate)
+    // must be clear of the player's own pawns; own-pawn blockage here is
+    // the "blocked off the circle" rule. Opponents aren't checked — they
+    // get bumped at the landing space via `apply_move`.
+    if let Some(extra_steps) = rules.start_pawn_advance(card) {
+        let mut target = start_exit;
+        let mut path_clear = !is_own_pawn_at(board, player, target);
+        for _ in 0..extra_steps {
+            if !path_clear {
+                break;
+            }
+            match rules.forward_neighbor(target, player) {
+                Some(next) => {
+                    target = next;
+                    if is_own_pawn_at(board, player, target) {
+                        path_clear = false;
+                    }
+                }
+                None => path_clear = false,
+            }
+        }
+        if path_clear {
+            for pw in 0..num_pawns as u8 {
+                let pawn = PawnId(pw);
+                if board.position(player, pawn) == start_area {
+                    out.push(Move::StartPawn { pawn, to: target });
+                    break; // all Start pawns are interchangeable; one canonical move
+                }
             }
         }
     }

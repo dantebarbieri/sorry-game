@@ -278,6 +278,98 @@ fn seven_split_emits_distinct_pawn_partitions() {
 }
 
 #[test]
+fn one_card_starts_pawn_on_start_exit() {
+    let rules = StandardRules::new();
+    let board = fresh_board(&rules, 4);
+    let p0 = PlayerId(0);
+    let legal = legal_moves(&rules, &board, p0, Card::One);
+    let start_exit = rules.start_exit(p0);
+    let found = legal
+        .iter()
+        .find(|m| matches!(m, Move::StartPawn { to, .. } if *to == start_exit));
+    assert!(
+        found.is_some(),
+        "expected StartPawn → {start_exit:?} for card 1; got {legal:?}"
+    );
+}
+
+#[test]
+fn two_card_starts_pawn_one_past_start_exit() {
+    let rules = StandardRules::new();
+    let board = fresh_board(&rules, 4);
+    let p0 = PlayerId(0);
+    let legal = legal_moves(&rules, &board, p0, Card::Two);
+    let start_exit = rules.start_exit(p0);
+    let past = rules
+        .forward_neighbor(start_exit, p0)
+        .expect("start_exit has forward neighbor");
+    let found = legal
+        .iter()
+        .find(|m| matches!(m, Move::StartPawn { to, .. } if *to == past));
+    assert!(
+        found.is_some(),
+        "expected StartPawn → {past:?} (one past start_exit) for card 2; got {legal:?}"
+    );
+    // And specifically NOT one to start_exit itself — 2 doesn't stop there.
+    assert!(
+        !legal
+            .iter()
+            .any(|m| matches!(m, Move::StartPawn { to, .. } if *to == start_exit)),
+        "card 2 must not produce StartPawn → start_exit; got {legal:?}"
+    );
+}
+
+#[test]
+fn two_card_blocked_if_own_pawn_on_start_exit() {
+    let rules = StandardRules::new();
+    let mut board = fresh_board(&rules, 4);
+    let p0 = PlayerId(0);
+    let start_exit = rules.start_exit(p0);
+    // Pawn 0 already parked on start_exit; pawn 1 still in Start.
+    board.set_position(p0, PawnId(0), start_exit);
+    let legal = legal_moves(&rules, &board, p0, Card::Two);
+    assert!(
+        !legal.iter().any(|m| matches!(m, Move::StartPawn { .. })),
+        "card 2 must be blocked when own pawn sits on start_exit; got {legal:?}"
+    );
+}
+
+#[test]
+fn two_card_blocked_if_own_pawn_one_past_start_exit() {
+    let rules = StandardRules::new();
+    let mut board = fresh_board(&rules, 4);
+    let p0 = PlayerId(0);
+    let start_exit = rules.start_exit(p0);
+    let past = rules.forward_neighbor(start_exit, p0).unwrap();
+    // start_exit clear, but the 2's landing square is occupied by our own pawn.
+    board.set_position(p0, PawnId(0), past);
+    let legal = legal_moves(&rules, &board, p0, Card::Two);
+    assert!(
+        !legal.iter().any(|m| matches!(m, Move::StartPawn { .. })),
+        "card 2 must be blocked when own pawn sits one past start_exit; got {legal:?}"
+    );
+}
+
+#[test]
+fn one_card_not_blocked_by_own_pawn_one_past_start_exit() {
+    // The 1-card only cares about start_exit itself. Having your own pawn
+    // one space further is irrelevant.
+    let rules = StandardRules::new();
+    let mut board = fresh_board(&rules, 4);
+    let p0 = PlayerId(0);
+    let start_exit = rules.start_exit(p0);
+    let past = rules.forward_neighbor(start_exit, p0).unwrap();
+    board.set_position(p0, PawnId(0), past);
+    let legal = legal_moves(&rules, &board, p0, Card::One);
+    assert!(
+        legal
+            .iter()
+            .any(|m| matches!(m, Move::StartPawn { to, .. } if *to == start_exit)),
+        "card 1 should still start a pawn onto start_exit; got {legal:?}"
+    );
+}
+
+#[test]
 fn space_enum_used_through_trait_classify() {
     // Sanity: the Rules trait's classify() returns Space enum correctly.
     let rules = StandardRules::new();
