@@ -13,6 +13,8 @@ pub enum SorryError {
     InvalidSpace(SpaceId),
     GameAlreadyOver,
     TurnLimitExceeded,
+    /// A proposed move is not in the legal-move set for the current card.
+    IllegalMove,
 }
 
 impl std::fmt::Display for SorryError {
@@ -33,6 +35,7 @@ impl std::fmt::Display for SorryError {
             Self::InvalidSpace(s) => write!(f, "invalid space {s:?}"),
             Self::GameAlreadyOver => write!(f, "game is already over"),
             Self::TurnLimitExceeded => write!(f, "turn limit exceeded"),
+            Self::IllegalMove => write!(f, "move is not in the legal set"),
         }
     }
 }

@@ -15,6 +15,7 @@
 
 pub mod board;
 pub mod card;
+pub(crate) mod engine;
 pub mod error;
 pub mod game;
 pub mod history;

@@ -9,9 +9,10 @@ use rand::seq::SliceRandom;
 
 use crate::board::{BoardState, PlayerId};
 use crate::card::Card;
+use crate::engine::Engine;
 use crate::error::{Result, SorryError};
 use crate::history::{Action, GameHistory, TurnRecord};
-use crate::moves::{apply_move, legal_moves};
+use crate::moves::legal_moves;
 use crate::rules::Rules;
 use crate::strategy::{Strategy, StrategyView};
 
@@ -127,12 +128,21 @@ impl Game {
         };
         // Loop allows extra turns granted by card 2.
         loop {
-            let card = self.draw_card(&mut turn)?;
+            let card = {
+                let mut engine = Engine {
+                    rules: &*self.rules,
+                    board: &mut self.board,
+                    rng: &mut self.rng,
+                    deck: &mut self.deck,
+                    discard: &mut self.discard,
+                };
+                engine.draw_card(&mut turn)?
+            };
             turn.actions.push(Action::Draw { card });
 
             // Resolve which card to play.
-            let (chosen, hand_index) = if self.rules.hand_size() == 0 {
-                (card, None)
+            let chosen = if self.rules.hand_size() == 0 {
+                card
             } else {
                 self.hands[self.current.0 as usize].push(card);
                 let view = self.view_for_current(None);
@@ -144,9 +154,8 @@ impl Game {
                     hand_index: idx,
                     card: chosen,
                 });
-                (chosen, Some(idx))
+                chosen
             };
-            let _ = hand_index;
 
             // Generate legal moves and let the strategy pick one.
             let legal = legal_moves(&*self.rules, &self.board, self.current, chosen);
@@ -165,15 +174,16 @@ impl Game {
                 )));
             }
 
-            let (bumps, slides) =
-                apply_move(&*self.rules, &mut self.board, self.current, &chosen_move);
-            self.discard.push(chosen);
-            turn.actions.push(Action::Play {
-                card: chosen,
-                mv: chosen_move,
-                bumps,
-                slides,
-            });
+            {
+                let mut engine = Engine {
+                    rules: &*self.rules,
+                    board: &mut self.board,
+                    rng: &mut self.rng,
+                    deck: &mut self.deck,
+                    discard: &mut self.discard,
+                };
+                engine.commit_play(self.current, chosen, &chosen_move, &mut turn)?;
+            }
 
             // Check for winner in the middle of the turn — if we just won, don't
             // take an extra turn.
@@ -189,21 +199,6 @@ impl Game {
         }
         self.history.turns.push(turn);
         Ok(())
-    }
-
-    fn draw_card(&mut self, turn: &mut TurnRecord) -> Result<Card> {
-        if self.deck.is_empty() {
-            if !self.rules.reshuffle_on_empty_deck() {
-                return Err(SorryError::EmptyDeck);
-            }
-            if self.discard.is_empty() {
-                return Err(SorryError::EmptyDeck);
-            }
-            self.deck.append(&mut self.discard);
-            self.deck.shuffle(&mut self.rng);
-            turn.actions.push(Action::Reshuffle);
-        }
-        self.deck.pop().ok_or(SorryError::EmptyDeck)
     }
 
     fn advance_current(&mut self) {
