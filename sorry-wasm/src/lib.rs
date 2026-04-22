@@ -12,9 +12,9 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 use sorry_core::{
-    AggregateStats, Game, GameHistory, GameStats, InteractiveGame, InteractiveGameState,
-    PlayerAction, PlayerId, RandomStrategy, Rules, Simulator, SimulatorConfig, StandardRules,
-    Strategy, StrategyDescription,
+    AggregateStats, BoardGeometry, Game, GameHistory, GameStats, InteractiveGame,
+    InteractiveGameState, PlayerAction, PlayerId, RandomStrategy, Rules, Simulator,
+    SimulatorConfig, StandardRules, Strategy, StrategyDescription,
 };
 
 // ─── Registries ───────────────────────────────────────────────────────
@@ -253,6 +253,14 @@ pub fn get_rules_info(rules_name: &str) -> String {
             num_spaces: rules.spaces().len(),
             reshuffle_on_empty_deck: rules.reshuffle_on_empty_deck(),
         })
+    })
+}
+
+#[wasm_bindgen]
+pub fn get_board_geometry(rules_name: &str) -> String {
+    to_json_or_error(|| {
+        let rules = make_rules(rules_name)?;
+        Ok::<BoardGeometry, String>(rules.board_geometry())
     })
 }
 

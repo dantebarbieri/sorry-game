@@ -7,6 +7,7 @@ target/
 pkg/
 frontend/pkg/
 frontend/static/pkg/
+frontend/src/lib/pkg/
 
 # ─── Node / pnpm ───────────────────────────────────────────────────────
 node_modules/
@@ -64,3 +65,7 @@ coverage/
 .nyc_output/
 tmp/
 *.tmp
+
+# ─── Inspiration assets (board images, piece STL + renders) ────────────
+# Local reference material for the frontend. Not distributed.
+inspo/

@@ -52,7 +52,7 @@ Follow the skyjo pattern: a **thin** wasm-bindgen layer exposing simulation, rep
 - `get_available_strategies()` / `get_available_rules()` — introspection for UI dropdowns.
 - Interactive-play entrypoints that validate a proposed action against a given state and return the next state + legal-moves set. All game state transitions go through WASM — the frontend never computes game state itself.
 
-Strategy and rule names are mapped to concrete types via match statements in `sorry-wasm/src/lib.rs`. The WASM module builds to `frontend/static/pkg/` via `wasm-pack build --target web --out-dir ../frontend/static/pkg` (SvelteKit serves `static/` at the site root). The `pkg/` directory is gitignored.
+Strategy and rule names are mapped to concrete types via match statements in `sorry-wasm/src/lib.rs`. The WASM module builds to `frontend/src/lib/pkg/` via `wasm-pack build --target web --out-dir ../frontend/src/lib/pkg` — inside the source tree so Vite can resolve the generated JS as an ES module (imports of JS files from `static/` are disallowed by Vite). The `pkg/` directory is gitignored.
 
 ### Frontend (`frontend`)
 
@@ -77,8 +77,8 @@ cd sorry-core && cargo build
 cd sorry-core && cargo test
 cd sorry-core && cargo test <test_name>        # single test
 
-# WASM (outputs to frontend/static/pkg/)
-cd sorry-wasm && wasm-pack build --target web --out-dir ../frontend/static/pkg
+# WASM (outputs to frontend/src/lib/pkg/)
+cd sorry-wasm && wasm-pack build --target web --out-dir ../frontend/src/lib/pkg
 
 # Frontend (pnpm only — never npm)
 cd frontend && pnpm install
@@ -113,5 +113,5 @@ cd frontend && pnpm check                       # svelte-check
 
 - Frontend framework: **SvelteKit** (skyjo uses React + Vite).
 - Package manager: **pnpm** exclusively (skyjo also uses pnpm).
-- WASM output path: `frontend/static/pkg/` (SvelteKit convention), not `frontend/pkg/`.
+- WASM output path: `frontend/src/lib/pkg/` (inside the Svelte source tree so Vite can import the glue JS as an ES module), not `frontend/pkg/` or `frontend/static/pkg/`.
 - Game domain: Sorry! has a graph-shaped board and pawn-based movement rather than a grid of cards, so `Board`/`Rules` carry more structure than skyjo's grid dimensions.
