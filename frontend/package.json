@@ -8,7 +8,9 @@
 		"build": "vite build",
 		"preview": "vite preview",
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch"
+		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
+		"test": "vitest run",
+		"test:watch": "vitest"
 	},
 	"devDependencies": {
 		"@sveltejs/adapter-auto": "^3.3.1",
@@ -18,7 +20,8 @@
 		"svelte": "^5.1.16",
 		"svelte-check": "^4.0.7",
 		"typescript": "^5.6.3",
-		"vite": "^5.4.11"
+		"vite": "^5.4.11",
+		"vitest": "^2.1.9"
 	},
 	"dependencies": {
 		"three": "^0.170.0"
