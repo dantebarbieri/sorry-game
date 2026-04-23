@@ -86,3 +86,49 @@ fn starting_player_is_within_bounds() {
     assert!(history.starting_player.0 < 4);
     let _ = PlayerId(0);
 }
+
+#[test]
+fn play_out_variant_records_full_placement_order() {
+    let rules: Box<dyn Rules> = Box::new(StandardRules::new_play_out());
+    let strategies = random_strategies(4);
+    let mut game = Game::new(rules, strategies, 12345).expect("new game");
+    game.set_max_turns(10_000);
+    let history = game.play().expect("play");
+    if history.truncated {
+        eprintln!("seed 12345 truncated — try a different seed for this test");
+        return;
+    }
+    // Play Out finalizes the full 1st-through-Nth placement order.
+    assert_eq!(
+        history.winners.len(),
+        history.num_players,
+        "Play Out should record every player's placement, got {:?}",
+        history.winners
+    );
+    // Placements must be a permutation of the player IDs.
+    let mut seen = std::collections::HashSet::new();
+    for w in &history.winners {
+        assert!(
+            w.0 < history.num_players as u8,
+            "placement {w:?} out of range"
+        );
+        assert!(seen.insert(w.0), "player {:?} recorded twice", w);
+    }
+}
+
+#[test]
+fn standard_variant_stops_at_first_finisher() {
+    let rules: Box<dyn Rules> = Box::new(StandardRules::new());
+    let strategies = random_strategies(4);
+    let game = Game::new(rules, strategies, 12345).expect("new game");
+    let history = game.play().expect("play");
+    if history.truncated {
+        return;
+    }
+    assert_eq!(
+        history.winners.len(),
+        1,
+        "Standard rules should end at the first finisher, got {:?}",
+        history.winners
+    );
+}

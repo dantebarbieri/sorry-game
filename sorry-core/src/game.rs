@@ -113,10 +113,15 @@ impl Game {
                 break;
             }
             self.play_turn()?;
-            self.check_winners();
+            self.record_any_new_finisher();
+            self.check_game_over();
             if !self.over {
                 self.advance_current();
             }
+        }
+        if self.over && !self.history.truncated {
+            let n = self.history.num_players;
+            self.rules.finalize_winners(&mut self.history.winners, n);
         }
         Ok(self.history)
     }
@@ -203,15 +208,33 @@ impl Game {
 
     fn advance_current(&mut self) {
         let n = self.history.num_players as u8;
-        self.current = PlayerId((self.current.0 + 1) % n);
+        let mut next = (self.current.0 + 1) % n;
+        // Skip anyone already recorded as finished — `play_out` rulesets
+        // exclude them from subsequent turns so the remaining players
+        // can establish a full placement order.
+        for _ in 0..n {
+            if !self.history.winners.iter().any(|w| w.0 == next) {
+                break;
+            }
+            next = (next + 1) % n;
+        }
+        self.current = PlayerId(next);
     }
 
-    fn check_winners(&mut self) {
-        let winners = self
-            .rules
-            .resolve_winners(&self.board, self.history.num_players);
-        if !winners.is_empty() {
-            self.history.winners = winners;
+    /// Append `self.current` to `history.winners` iff they just finished
+    /// and aren't already recorded. This is how Play Out builds its
+    /// ordered 1st→Nth placement list turn by turn.
+    fn record_any_new_finisher(&mut self) {
+        if self.rules.is_winner(&self.board, self.current)
+            && !self.history.winners.contains(&self.current)
+        {
+            self.history.winners.push(self.current);
+        }
+    }
+
+    fn check_game_over(&mut self) {
+        let n = self.history.num_players;
+        if self.rules.game_over(&self.history.winners, n) {
             self.over = true;
         }
     }
