@@ -117,7 +117,7 @@ export class OnlineController implements PlayController {
 						if (p.player_type.kind === 'Human') return { type: 'Human' as const };
 						if (p.player_type.kind === 'Bot')
 							return { type: 'Bot' as const, strategy: p.player_type.strategy };
-						return { type: 'Bot' as const, strategy: 'Random' };
+						return { type: 'Empty' as const };
 					})
 				};
 				break;

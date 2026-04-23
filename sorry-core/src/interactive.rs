@@ -84,6 +84,11 @@ pub struct InteractiveGameState {
     /// an extra-turn chain completes). Exposing it lets clients see the
     /// most recent `Action::Play` that hasn't been finalized yet.
     pub current_turn: Option<TurnRecord>,
+    /// `seat_sides[p]` is the board side (0=Red, 1=Blue, 2=Yellow,
+    /// 3=Green) for engine player `p`. Default is identity for games
+    /// that use all four colors; skipped-color games have non-contiguous
+    /// values.
+    pub seat_sides: Vec<u8>,
 }
 
 /// Per-player snapshot — hides other players' persistent hands and the
@@ -110,6 +115,9 @@ pub struct PlayerView {
     pub winners: Vec<PlayerId>,
     pub truncated: bool,
     pub turn_count: usize,
+    /// `seat_sides[p]` — engine-player to board-side mapping. See
+    /// `InteractiveGameState::seat_sides` for details.
+    pub seat_sides: Vec<u8>,
 }
 
 pub struct InteractiveGame {
@@ -349,6 +357,7 @@ impl InteractiveGame {
             truncated: self.history.truncated,
             turn_count: self.history.turns.len(),
             current_turn: self.current_turn.clone(),
+            seat_sides: self.rules.seat_sides(self.history.num_players),
         }
     }
 
@@ -398,6 +407,7 @@ impl InteractiveGame {
             winners: self.history.winners.clone(),
             truncated: self.history.truncated,
             turn_count: self.history.turns.len(),
+            seat_sides: self.rules.seat_sides(self.history.num_players),
         }
     }
 

@@ -7,7 +7,22 @@ export function loadSetup(): PlaySetup | null {
 	const raw = sessionStorage.getItem(SETUP_KEY);
 	if (!raw) return null;
 	try {
-		return JSON.parse(raw) as PlaySetup;
+		const parsed = JSON.parse(raw) as Partial<PlaySetup> & {
+			numPlayers?: number;
+		};
+		if (!parsed || !Array.isArray(parsed.seats) || !parsed.rules) return null;
+		// Pad to 4 seats so older stored setups (fewer-seat variants) still
+		// load cleanly. A numeric `numPlayers` from the previous schema is
+		// interpreted by marking the excess seats as Empty.
+		const seats: PlaySetup['seats'] = Array.from({ length: 4 }, (_, i) => {
+			if (typeof parsed.numPlayers === 'number' && i >= parsed.numPlayers) {
+				return { type: 'Empty' } as const;
+			}
+			return (
+				parsed.seats?.[i] ?? ({ type: 'Bot', strategy: 'Random' } as const)
+			);
+		});
+		return { rules: parsed.rules, seats };
 	} catch {
 		return null;
 	}

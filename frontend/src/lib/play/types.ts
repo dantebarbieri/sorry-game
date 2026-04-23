@@ -5,10 +5,16 @@ import type { StepCommand } from '$lib/board/BoardCanvas.svelte';
 
 export type Ruleset = 'Standard' | 'PlayOut';
 
-export type SeatKind = { type: 'Human' } | { type: 'Bot'; strategy: string };
+export type SeatKind =
+	| { type: 'Human' }
+	| { type: 'Bot'; strategy: string }
+	| { type: 'Empty' };
 
 export interface PlaySetup {
 	rules: Ruleset;
+	/** Always length 4, one per board color (Red, Blue, Yellow, Green).
+	 *  Empty entries are skipped so the user can run e.g. a 2-player
+	 *  Red/Yellow game. Order within the array maps 1:1 to color. */
 	seats: SeatKind[];
 }
 
@@ -28,6 +34,17 @@ export const DEFAULT_SETUP: PlaySetup = {
 		{ type: 'Bot', strategy: 'Random' }
 	]
 };
+
+/** Compute the set of playing seat indices (colors) from a setup in
+ *  canonical order. Empty seats are dropped. The resulting array is
+ *  the `seats` value sent to the engine's `create_interactive_game`. */
+export function activeSeatSides(setup: PlaySetup): number[] {
+	const sides: number[] = [];
+	for (let i = 0; i < setup.seats.length; i++) {
+		if (setup.seats[i].type !== 'Empty') sides.push(i);
+	}
+	return sides;
+}
 
 /**
  * Shared controller contract. `LocalController` drives the WASM interactive

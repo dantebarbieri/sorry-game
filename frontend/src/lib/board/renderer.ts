@@ -355,7 +355,7 @@ export class BoardRenderer {
 			this.pendingStep = record != null && player != null ? { record, player } : null;
 			return;
 		}
-		this.ensurePawns(state.num_players);
+		this.ensurePawns(state);
 		this.rebuildDeckDiscard(state);
 		const prev = this.previousState;
 		if (record && prev && player != null) {
@@ -431,8 +431,11 @@ export class BoardRenderer {
 		currentPlayer?: number;
 	}): void {
 		this.disposeGroup(this.highlightsGroup);
-		const colorForPlayer = (p: number) =>
-			new THREE.Color(this.skin.palette.players[p] ?? '#888888');
+		const state = this.previousState;
+		const colorForPlayer = (p: number) => {
+			const side = state ? this.sideFor(state, p) : p;
+			return new THREE.Color(this.skin.palette.players[side] ?? '#888888');
+		};
 		const destColor = colorForPlayer(
 			opts.currentPlayer ?? opts.selectedPawn?.player ?? opts.lockedPawn?.player ?? 0
 		);
@@ -564,11 +567,16 @@ export class BoardRenderer {
 		return out;
 	}
 
-	private ensurePawns(numPlayers: number): void {
+	private sideFor(state: GameStateView, player: number): number {
+		return state.seat_sides?.[player] ?? player;
+	}
+
+	private ensurePawns(state: GameStateView): void {
 		if (!this.pawnGeometry) return;
-		while (this.pawnMeshes.length < numPlayers) {
+		while (this.pawnMeshes.length < state.num_players) {
 			const p = this.pawnMeshes.length;
-			const color = this.skin.palette.players[p] ?? '#888888';
+			const side = this.sideFor(state, p);
+			const color = this.skin.palette.players[side] ?? '#888888';
 			const row: THREE.Mesh[] = [];
 			for (let k = 0; k < PAWNS_PER_PLAYER; k++) {
 				const mesh = makePiece(this.pawnGeometry, color);
@@ -580,9 +588,12 @@ export class BoardRenderer {
 		}
 		// Hide unused player slots (e.g. 2- or 3-player games on a 4-color board).
 		for (let p = 0; p < this.pawnMeshes.length; p++) {
-			const visible = p < numPlayers;
+			const visible = p < state.num_players;
 			for (const mesh of this.pawnMeshes[p]) mesh.visible = visible;
 		}
+		// Retint in case seat mapping changed between games (e.g. a new
+		// game was started with a different color selection).
+		this.retintPawns();
 	}
 
 	private snapPawns(state: GameStateView): void {
@@ -632,8 +643,10 @@ export class BoardRenderer {
 	}
 
 	private retintPawns(): void {
+		const state = this.previousState;
 		for (let p = 0; p < this.pawnMeshes.length; p++) {
-			const color = this.skin.palette.players[p] ?? '#888888';
+			const side = state ? this.sideFor(state, p) : p;
+			const color = this.skin.palette.players[side] ?? '#888888';
 			for (const mesh of this.pawnMeshes[p]) {
 				const mat = mesh.material as THREE.MeshStandardMaterial;
 				mat.color.set(color);

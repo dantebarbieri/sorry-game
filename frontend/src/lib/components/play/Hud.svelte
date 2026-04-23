@@ -27,13 +27,22 @@
 		lastAnnouncement
 	}: Props = $props();
 
+	/** Engine player → board side (color). Falls back to identity when
+	 *  the engine didn't emit `seat_sides` (older payloads). */
+	function sideOf(p: number): number {
+		return gameState?.seat_sides?.[p] ?? p;
+	}
+
 	const turnLabel = $derived.by(() => {
 		const s = gameState;
 		if (!s) return '';
-		if (s.winners.length > 0)
-			return `Game over — ${PLAYER_NAMES[s.winners[0]] ?? `P${s.winners[0]}`} wins`;
+		if (s.winners.length > 0) {
+			const side = sideOf(s.winners[0]);
+			return `Game over — ${PLAYER_NAMES[side] ?? `P${side}`} wins`;
+		}
 		if (s.truncated) return 'Game over (truncated)';
-		return `Turn ${s.turn_count + 1} · ${PLAYER_NAMES[s.current_player] ?? `P${s.current_player}`}`;
+		const side = sideOf(s.current_player);
+		return `Turn ${s.turn_count + 1} · ${PLAYER_NAMES[side] ?? `P${side}`}`;
 	});
 
 	const lastPlayedLabel = $derived.by(() => {
@@ -41,7 +50,7 @@
 		if (!step) return null;
 		return {
 			label: cardLabel(step.record.card) ?? step.record.card,
-			color: skin.palette.players[step.player]
+			color: skin.palette.players[sideOf(step.player)]
 		};
 	});
 
@@ -81,7 +90,7 @@
 			</span>
 		{/if}
 		{#if viewerCanMove && viewer !== null}
-			<span class="you-up" style:color={skin.palette.players[viewer]}>
+			<span class="you-up" style:color={skin.palette.players[sideOf(viewer)]}>
 				Your turn ({drawnCard ?? '—'})
 			</span>
 		{/if}
@@ -99,8 +108,8 @@
 					<span
 						class="seat-dot"
 						class:current={p === gameState.current_player}
-						style:background={skin.palette.players[p]}
-						title="{PLAYER_NAMES[p] ?? `P${p}`}{p === gameState.current_player ? ' (up)' : ''}"
+						style:background={skin.palette.players[sideOf(p)]}
+						title="{PLAYER_NAMES[sideOf(p)] ?? `P${sideOf(p)}`}{p === gameState.current_player ? ' (up)' : ''}"
 					></span>
 				{/each}
 			</div>
@@ -108,8 +117,9 @@
 		{#if gameState && gameState.winners.length > 0}
 			<div class="placements" role="status">
 				{#each gameState.winners as player, i (player)}
-					<span class="place" style:color={skin.palette.players[player]}>
-						{PLACEMENT_ORDINAL[i] ?? `${i + 1}th`} {PLAYER_NAMES[player] ?? `P${player}`}
+					<span class="place" style:color={skin.palette.players[sideOf(player)]}>
+						{PLACEMENT_ORDINAL[i] ?? `${i + 1}th`}
+						{PLAYER_NAMES[sideOf(player)] ?? `P${sideOf(player)}`}
 					</span>
 				{/each}
 			</div>

@@ -7,6 +7,7 @@
 	import { LocalController } from '$lib/play/local-controller.svelte';
 	import { OnlineController } from '$lib/play/online-controller.svelte';
 	import {
+		activeSeatSides,
 		DEFAULT_SETUP,
 		type PlaySetup,
 		type PlayController,
@@ -25,7 +26,9 @@
 	const online = new OnlineController();
 
 	let mode = $state<'local' | 'online'>('local');
-	let setupOpen = $state(false);
+	let setupOpen = $state(true);
+	let initialSetupNeeded = $state(true);
+	let pendingSetup = $state<PlaySetup>(DEFAULT_SETUP);
 	let viewer = $state<ViewerSeat>(0);
 	let autoStep = $state(true);
 	let autoPass = $state(true);
@@ -36,11 +39,10 @@
 	let selectedPawn = $state<{ player: number; pawn: number } | null>(null);
 	let pendingLeg1 = $state<SplitLeg | null>(null);
 
-	onMount(async () => {
-		const stored = loadSetup() ?? DEFAULT_SETUP;
-		await local.newGame(stored);
-		viewer = computeInitialViewer(stored);
-		rotateCameraTo(viewer);
+	onMount(() => {
+		// Hydrate the drawer with the user's last setup, but don't start
+		// the game yet — the user configures first, then clicks Start.
+		pendingSetup = loadSetup() ?? DEFAULT_SETUP;
 	});
 
 	onDestroy(() => {
@@ -48,25 +50,31 @@
 		online.disconnect();
 	});
 
+	/** First engine-player index whose seat is Human, or null. The
+	 *  returned value is a PlayerId (indexes `gameState.pawn_positions`),
+	 *  not a board side. */
 	function computeInitialViewer(setup: PlaySetup): ViewerSeat {
-		const humans = setup.seats
-			.map((s, i) => (s.type === 'Human' ? i : -1))
-			.filter((i) => i >= 0);
-		if (humans.length === 0) return null;
-		return humans[0];
+		const sides = activeSeatSides(setup);
+		for (let engineIdx = 0; engineIdx < sides.length; engineIdx++) {
+			if (setup.seats[sides[engineIdx]].type === 'Human') return engineIdx;
+		}
+		return null;
 	}
 
-	function edgeAzimuthForPlayer(seat: number): number {
+	function edgeAzimuthForSide(side: number): number {
 		const map = [Math.PI, Math.PI / 2, 0, -Math.PI / 2];
-		return map[seat] ?? 0;
+		return map[side] ?? 0;
 	}
 
-	function rotateCameraTo(seat: ViewerSeat) {
-		if (seat === null) return;
+	/** Rotate the camera to the given engine player's board side. */
+	function rotateCameraTo(engineIdx: ViewerSeat) {
+		if (engineIdx === null) return;
+		const sides = activeSeatSides(activeController.setup);
+		const side = sides[engineIdx] ?? engineIdx;
 		cameraCommand = {
 			view: 'edge',
 			nonce: (cameraCommand?.nonce ?? 0) + 1,
-			targetAzimuth: edgeAzimuthForPlayer(seat)
+			targetAzimuth: edgeAzimuthForSide(side)
 		};
 		activePreset = 'edge';
 	}
@@ -80,13 +88,14 @@
 		const s = local.gameState;
 		const setup = local.setup;
 		if (!s || s.winners.length > 0 || s.truncated) return;
-		const humans = setup.seats
-			.map((kind, i) => (kind.type === 'Human' ? i : -1))
+		const sides = activeSeatSides(setup);
+		const humanEngineIdxs = sides
+			.map((side, engineIdx) => (setup.seats[side].type === 'Human' ? engineIdx : -1))
 			.filter((i) => i >= 0);
-		if (humans.length <= 1) return;
+		if (humanEngineIdxs.length <= 1) return;
 		const an = s.action_needed;
 		if (an.type !== 'ChooseMove' && an.type !== 'ChooseCard') return;
-		if (humans.includes(an.player) && an.player !== viewer) {
+		if (humanEngineIdxs.includes(an.player) && an.player !== viewer) {
 			viewer = an.player;
 			rotateCameraTo(viewer);
 			selectedPawn = null;
@@ -107,12 +116,14 @@
 
 	async function handleApplySetup(setup: PlaySetup) {
 		saveSetup(setup);
+		pendingSetup = setup;
 		await local.newGame(setup);
 		viewer = computeInitialViewer(setup);
 		rotateCameraTo(viewer);
 		selectedPawn = null;
 		pendingLeg1 = null;
 		setupOpen = false;
+		initialSetupNeeded = false;
 	}
 
 	function onPickView(view: CameraView) {
@@ -162,7 +173,10 @@
 		}
 	}
 
-	const showBoard = $derived(mode === 'local' || (mode === 'online' && online.lobby && online.lobby.phase !== 'lobby'));
+	const showBoard = $derived.by(() => {
+		if (mode === 'online') return !!(online.lobby && online.lobby.phase !== 'lobby');
+		return local.gameState !== null;
+	});
 </script>
 
 <div class="play">
@@ -185,6 +199,11 @@
 
 	{#if mode === 'online' && !showBoard}
 		<OnlineLobby controller={online} onConnected={() => { /* lobby shown until phase leaves 'lobby' */ }} />
+	{:else if mode === 'local' && !showBoard}
+		<div class="pre-game">
+			<p>Configure the game to begin.</p>
+			<button class="primary" onclick={() => (setupOpen = true)}>Configure</button>
+		</div>
 	{:else}
 		<Hud
 			skin={theme.skin}
@@ -233,7 +252,8 @@
 
 <SetupDrawer
 	open={setupOpen}
-	setup={local.setup}
+	setup={initialSetupNeeded ? pendingSetup : local.setup}
+	required={initialSetupNeeded}
 	onApply={handleApplySetup}
 	onClose={() => (setupOpen = false)}
 />
@@ -276,5 +296,25 @@
 	.tabs button:disabled {
 		opacity: 0.35;
 		cursor: not-allowed;
+	}
+	.pre-game {
+		flex: 1;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 1rem;
+		padding: 4rem 1rem;
+		opacity: 0.9;
+	}
+	.pre-game .primary {
+		background: rgba(246, 196, 84, 0.25);
+		border: 1px solid rgba(246, 196, 84, 0.7);
+		color: inherit;
+		padding: 0.5rem 1.25rem;
+		border-radius: 6px;
+		font: inherit;
+		font-weight: 600;
+		cursor: pointer;
 	}
 </style>

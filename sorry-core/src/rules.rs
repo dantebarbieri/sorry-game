@@ -56,6 +56,16 @@ pub trait Rules: Send + Sync {
     fn start_exit(&self, player: PlayerId) -> SpaceId;
     fn home(&self, player: PlayerId) -> SpaceId;
 
+    /// Engine-player → board-side mapping. The renderer uses this to
+    /// paint each player's pawns in their configured color and to
+    /// highlight the right start/home regions. Default: identity —
+    /// player `p` occupies board side `p`. Variants that allow skipping
+    /// colors (e.g. a 2-player Red/Yellow game) override this to return
+    /// non-contiguous values like `[0, 2]`.
+    fn seat_sides(&self, num_players: usize) -> Vec<u8> {
+        (0..num_players as u8).collect()
+    }
+
     /// Publish a normalized `[-1, 1]` layout for every `SpaceId` on this
     /// board, plus per-player adjacency and slide data. One-shot snapshot —
     /// immutable for the life of a game; consumed by the renderer.
@@ -164,6 +174,13 @@ pub struct StandardRules {
     /// turn loop. When false, the game ends as soon as any player gets
     /// all four pawns home — classic Sorry!
     play_out: bool,
+    /// Mapping from engine player index → board side (0=Red, 1=Blue,
+    /// 2=Yellow, 3=Green). `seat_sides.len()` is the number of players
+    /// in the game. Default is identity `[0, 1, 2, 3]` for a 4-player
+    /// game. Use [`StandardRules::with_seat_sides`] to create a game
+    /// that skips specific colors (e.g. a 2-player Red/Yellow game has
+    /// `seat_sides = [0, 2]`).
+    seat_sides: Vec<u8>,
 }
 
 impl Default for StandardRules {
@@ -174,17 +191,48 @@ impl Default for StandardRules {
 
 impl StandardRules {
     pub fn new() -> Self {
-        Self::build(false)
+        Self::build(false, (0u8..NUM_SIDES as u8).collect())
     }
 
     /// Constructor for the "Play Out" variant — same board and card
     /// rules, but the game continues past the first finisher until only
     /// one player is left on the board.
     pub fn new_play_out() -> Self {
-        Self::build(true)
+        Self::build(true, (0u8..NUM_SIDES as u8).collect())
     }
 
-    fn build(play_out: bool) -> Self {
+    /// Construct with an explicit seat→side mapping. `sides.len()` is
+    /// `num_players`; each value must be a distinct side index in
+    /// `0..4`. Used by the frontend to allow players to pick non-
+    /// contiguous colors (e.g. `[0, 2]` for a 2-player Red/Yellow game).
+    pub fn with_seat_sides(sides: Vec<u8>, play_out: bool) -> Self {
+        assert!(
+            !sides.is_empty() && sides.len() <= NUM_SIDES as usize,
+            "seat sides length {} out of range",
+            sides.len()
+        );
+        for (i, s) in sides.iter().enumerate() {
+            assert!((*s as u32) < NUM_SIDES, "invalid side {s} at index {i}");
+            for other in &sides[..i] {
+                assert!(*s != *other, "duplicate side {s} in seat mapping");
+            }
+        }
+        Self::build(play_out, sides)
+    }
+
+    /// Side index for the given engine player — the color their pawns
+    /// belong to. Used internally by every function that needs to map
+    /// a PlayerId onto a specific region of the board.
+    pub fn side_of(&self, player: PlayerId) -> PlayerId {
+        PlayerId(self.seat_sides[player.0 as usize])
+    }
+
+    /// Number of players configured for this rules instance.
+    pub fn num_players(&self) -> usize {
+        self.seat_sides.len()
+    }
+
+    fn build(play_out: bool, seat_sides: Vec<u8>) -> Self {
         let mut spaces = Vec::with_capacity(88);
         for i in 0..NUM_TRACK {
             spaces.push(Space::Track(i));
@@ -200,7 +248,11 @@ impl StandardRules {
         for p in 0..NUM_SIDES as u8 {
             spaces.push(Space::Home(PlayerId(p)));
         }
-        Self { spaces, play_out }
+        Self {
+            spaces,
+            play_out,
+            seat_sides,
+        }
     }
 
     pub fn classify_space(&self, id: SpaceId) -> Option<Space> {
@@ -239,22 +291,23 @@ impl Rules for StandardRules {
     }
 
     fn forward_neighbor(&self, from: SpaceId, player: PlayerId) -> Option<SpaceId> {
+        let side = self.side_of(player);
         match classify(from)? {
             Space::Track(i) => {
-                if i == safety_entry_track(player) {
-                    Some(safety_id(player, 0))
+                if i == safety_entry_track(side) {
+                    Some(safety_id(side, 0))
                 } else {
                     Some(track_id(i + 1))
                 }
             }
             Space::Safety(owner, slot) => {
-                if owner != player {
+                if owner != side {
                     return None;
                 }
                 if slot + 1 < SAFETY_LEN {
-                    Some(safety_id(player, slot + 1))
+                    Some(safety_id(side, slot + 1))
                 } else {
-                    Some(home_id(player))
+                    Some(home_id(side))
                 }
             }
             Space::StartArea(_) | Space::Home(_) => None,
@@ -262,19 +315,20 @@ impl Rules for StandardRules {
     }
 
     fn backward_neighbor(&self, from: SpaceId, player: PlayerId) -> Option<SpaceId> {
+        let side = self.side_of(player);
         match classify(from)? {
             Space::Track(i) => {
                 let prev = (i + NUM_TRACK - 1) % NUM_TRACK;
                 Some(track_id(prev))
             }
             Space::Safety(owner, slot) => {
-                if owner != player {
+                if owner != side {
                     return None;
                 }
                 if slot == 0 {
-                    Some(track_id(safety_entry_track(player)))
+                    Some(track_id(safety_entry_track(side)))
                 } else {
-                    Some(safety_id(player, slot - 1))
+                    Some(safety_id(side, slot - 1))
                 }
             }
             Space::StartArea(_) | Space::Home(_) => None,
@@ -287,7 +341,7 @@ impl Rules for StandardRules {
         };
         let side = i / SIDE_LEN;
         let pos_in_side = i % SIDE_LEN;
-        if side as u8 == player.0 {
+        if side as u8 == self.side_of(player).0 {
             return None; // own-color slide does not trigger
         }
         let base = side * SIDE_LEN;
@@ -313,13 +367,17 @@ impl Rules for StandardRules {
     }
 
     fn start_area(&self, player: PlayerId) -> SpaceId {
-        start_area_id(player)
+        start_area_id(self.side_of(player))
     }
     fn start_exit(&self, player: PlayerId) -> SpaceId {
-        track_id(player.0 as u32 * SIDE_LEN + 4)
+        track_id(self.side_of(player).0 as u32 * SIDE_LEN + 4)
     }
     fn home(&self, player: PlayerId) -> SpaceId {
-        home_id(player)
+        home_id(self.side_of(player))
+    }
+
+    fn seat_sides(&self, _num_players: usize) -> Vec<u8> {
+        self.seat_sides.clone()
     }
 
     fn board_geometry(&self) -> BoardGeometry {

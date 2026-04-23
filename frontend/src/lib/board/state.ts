@@ -30,4 +30,8 @@ export interface GameStateView {
 	 */
 	current_turn: TurnRecord | null;
 	action_needed: ActionNeeded;
+	/** Engine-player → board-side (color) mapping. `seat_sides[p]` gives
+	 *  the palette index for player `p`'s pawns. Defaults to identity
+	 *  `[0, 1, 2, 3]` when the engine doesn't emit it (older payloads). */
+	seat_sides?: number[];
 }

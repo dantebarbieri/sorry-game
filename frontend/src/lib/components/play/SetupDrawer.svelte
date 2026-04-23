@@ -14,11 +14,13 @@
 	interface Props {
 		open: boolean;
 		setup: PlaySetup;
+		/** When true, closing without applying is disallowed (first-time setup). */
+		required?: boolean;
 		onApply: (setup: PlaySetup) => void;
 		onClose: () => void;
 	}
 
-	const { open, setup, onApply, onClose }: Props = $props();
+	const { open, setup, required = false, onApply, onClose }: Props = $props();
 
 	const theme = useTheme();
 
@@ -33,7 +35,9 @@
 	$effect(() => {
 		if (open) {
 			rules = setup.rules;
-			seats = setup.seats.map((s) => ({ ...s }));
+			seats = Array.from({ length: 4 }, (_, i) =>
+				setup.seats[i] ? { ...setup.seats[i] } : { type: 'Bot', strategy: 'Random' }
+			);
 		}
 	});
 
@@ -53,33 +57,17 @@
 		seats = seats.map((s, idx) => (idx === i ? kind : s));
 	}
 
-	function apply() {
-		onApply({ rules, seats });
+	function tryClose() {
+		if (!required) onClose();
 	}
 
-	function preset(name: 'solo-vs-bots' | 'observer' | 'hotseat') {
-		if (name === 'solo-vs-bots') {
-			seats = [
-				{ type: 'Human' },
-				{ type: 'Bot', strategy: 'Random' },
-				{ type: 'Bot', strategy: 'Random' },
-				{ type: 'Bot', strategy: 'Random' }
-			];
-		} else if (name === 'observer') {
-			seats = [
-				{ type: 'Bot', strategy: 'Random' },
-				{ type: 'Bot', strategy: 'Random' },
-				{ type: 'Bot', strategy: 'Random' },
-				{ type: 'Bot', strategy: 'Random' }
-			];
-		} else {
-			seats = [
-				{ type: 'Human' },
-				{ type: 'Human' },
-				{ type: 'Human' },
-				{ type: 'Human' }
-			];
-		}
+	const activeCount = $derived(seats.filter((s) => s.type !== 'Empty').length);
+	const humanCount = $derived(seats.filter((s) => s.type === 'Human').length);
+	const canApply = $derived(activeCount >= 2);
+
+	function apply() {
+		if (!canApply) return;
+		onApply({ rules, seats });
 	}
 </script>
 
@@ -87,22 +75,26 @@
 	<div
 		class="scrim"
 		role="presentation"
-		onclick={onClose}
-		onkeydown={(e) => e.key === 'Escape' && onClose()}
+		onclick={tryClose}
+		onkeydown={(e) => e.key === 'Escape' && tryClose()}
 	></div>
 	<div class="drawer" role="dialog" aria-modal="true" aria-label="New game setup">
 		<header>
-			<h2>New game</h2>
-			<button class="close" onclick={onClose} aria-label="Close setup">✕</button>
+			<h2>{required ? 'Configure game' : 'New game'}</h2>
+			{#if !required}
+				<button class="close" onclick={onClose} aria-label="Close setup">✕</button>
+			{/if}
 		</header>
 
 		<div class="section">
-			<label for="rules-select">Rules</label>
-			<select id="rules-select" bind:value={rules}>
-				{#each availableRules as r (r)}
-					<option value={r}>{r}</option>
-				{/each}
-			</select>
+			<label class="block">
+				<span class="section-title">Rules</span>
+				<select bind:value={rules}>
+					{#each availableRules as r (r)}
+						<option value={r}>{r}</option>
+					{/each}
+				</select>
+			</label>
 			<p class="hint">
 				{#if rules === 'Standard'}
 					Standard — first player to land all four pawns home wins.
@@ -113,19 +105,14 @@
 		</div>
 
 		<div class="section">
-			<span class="section-title">Presets</span>
-			<div class="preset-row">
-				<button type="button" onclick={() => preset('solo-vs-bots')}>Solo vs. bots</button>
-				<button type="button" onclick={() => preset('hotseat')}>Hot-seat</button>
-				<button type="button" onclick={() => preset('observer')}>Observer</button>
-			</div>
-		</div>
-
-		<div class="section">
-			<span class="section-title">Seats</span>
+			<span class="section-title">Players</span>
+			<p class="hint">
+				Each color is Human, a bot strategy, or Empty (that color sits out).
+				Pick your favorite color to play as. Minimum 2 players.
+			</p>
 			<div class="seats">
 				{#each seats as seat, i (i)}
-					<div class="seat">
+					<div class="seat" class:empty={seat.type === 'Empty'}>
 						<span
 							class="badge"
 							style:background={theme.skin.palette.players[i]}
@@ -133,57 +120,39 @@
 						></span>
 						<span class="seat-name">{PLAYER_NAMES[i]}</span>
 						<div class="seat-controls">
-							<label class="radio">
-								<input
-									type="radio"
-									name="seat-{i}"
-									checked={seat.type === 'Human'}
-									onchange={() => setSeat(i, { type: 'Human' })}
-								/>
-								Human
-							</label>
-							<label class="radio">
-								<input
-									type="radio"
-									name="seat-{i}"
-									checked={seat.type === 'Bot'}
-									onchange={() =>
-										setSeat(i, {
-											type: 'Bot',
-											strategy: seat.type === 'Bot' ? seat.strategy : 'Random'
-										})
-									}
-								/>
-								Bot
-							</label>
-							{#if seat.type === 'Bot'}
-								<select
-									value={seat.strategy}
-									onchange={(e) =>
-										setSeat(i, {
-											type: 'Bot',
-											strategy: (e.currentTarget as HTMLSelectElement).value
-										})}
-									aria-label="Strategy for {PLAYER_NAMES[i]}"
-								>
-									{#each availableStrategies as s (s.name)}
-										<option value={s.name} title={s.description}>{s.name}</option>
-									{/each}
-								</select>
-							{/if}
+							<select
+								aria-label="{PLAYER_NAMES[i]} seat type"
+								value={seat.type === 'Bot' ? `Bot:${seat.strategy}` : seat.type}
+								onchange={(e) => {
+									const val = (e.currentTarget as HTMLSelectElement).value;
+									if (val === 'Human') setSeat(i, { type: 'Human' });
+									else if (val === 'Empty') setSeat(i, { type: 'Empty' });
+									else if (val.startsWith('Bot:'))
+										setSeat(i, { type: 'Bot', strategy: val.slice(4) });
+								}}
+							>
+								<option value="Human">Human</option>
+								<option value="Empty">Not playing</option>
+								{#each availableStrategies as s (s.name)}
+									<option value={'Bot:' + s.name} title={s.description}>Bot · {s.name}</option>
+								{/each}
+							</select>
 						</div>
 					</div>
 				{/each}
 			</div>
-			<p class="hint">
-				More strategies coming soon — see the
-				<a href="/rules#strategies">Strategies</a> section of the rules for planned bots.
-			</p>
+			{#if activeCount < 2}
+				<p class="error">At least two colors must be playing.</p>
+			{:else if humanCount === 0}
+				<p class="hint">No humans configured — you'll be an observer.</p>
+			{/if}
 		</div>
 
 		<footer>
-			<button class="secondary" onclick={onClose}>Cancel</button>
-			<button class="primary" onclick={apply}>Start game</button>
+			{#if !required}
+				<button class="secondary" onclick={onClose}>Cancel</button>
+			{/if}
+			<button class="primary" onclick={apply} disabled={!canApply}>Start game</button>
 		</footer>
 	</div>
 {/if}
@@ -239,12 +208,16 @@
 		flex-direction: column;
 		gap: 0.4rem;
 	}
-	.section > label,
-	.section > .section-title {
+	.section-title {
 		font-size: 0.75rem;
 		text-transform: uppercase;
 		letter-spacing: 0.08em;
 		opacity: 0.65;
+	}
+	.block {
+		display: flex;
+		flex-direction: column;
+		gap: 0.3rem;
 	}
 	select {
 		background: rgba(255, 255, 255, 0.06);
@@ -263,26 +236,10 @@
 		opacity: 0.7;
 		margin: 0;
 	}
-	.hint a {
-		color: inherit;
-	}
-	.preset-row {
-		display: flex;
-		gap: 0.4rem;
-		flex-wrap: wrap;
-	}
-	.preset-row button {
-		background: rgba(255, 255, 255, 0.06);
-		border: 1px solid rgba(255, 255, 255, 0.12);
-		color: inherit;
-		padding: 0.3rem 0.7rem;
-		border-radius: 4px;
-		cursor: pointer;
-		font: inherit;
-	}
-	:global(.app[data-skin='light']) .preset-row button {
-		background: rgba(0, 0, 0, 0.03);
-		border-color: rgba(0, 0, 0, 0.12);
+	.error {
+		font-size: 0.8rem;
+		color: salmon;
+		margin: 0.2rem 0 0;
 	}
 	.seats {
 		display: flex;
@@ -301,6 +258,9 @@
 	:global(.app[data-skin='light']) .seat {
 		background: rgba(0, 0, 0, 0.03);
 	}
+	.seat.empty {
+		opacity: 0.55;
+	}
 	.badge {
 		width: 14px;
 		height: 14px;
@@ -313,16 +273,12 @@
 	.seat-controls {
 		display: flex;
 		align-items: center;
-		gap: 0.65rem;
-		flex-wrap: wrap;
+		gap: 0.5rem;
 		justify-self: end;
+		min-width: 10rem;
 	}
-	.radio {
-		display: inline-flex;
-		gap: 0.25rem;
-		align-items: center;
-		font-size: 0.9rem;
-		cursor: pointer;
+	.seat-controls select {
+		flex: 1;
 	}
 	footer {
 		margin-top: auto;
@@ -342,6 +298,10 @@
 		background: #f6c454;
 		color: #1b1710;
 		font-weight: 600;
+	}
+	.primary:disabled {
+		opacity: 0.4;
+		cursor: not-allowed;
 	}
 	.secondary {
 		background: transparent;

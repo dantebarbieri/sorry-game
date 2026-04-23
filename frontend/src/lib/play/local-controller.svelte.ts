@@ -4,7 +4,7 @@ import type { StepCommand } from '$lib/board/BoardCanvas.svelte';
 import { findLastPlay, type GameHistory, type PlayerAction } from '$lib/board/actions';
 import { loadWasm, parseJsonOrThrow } from '$lib/wasm';
 import type { PlayController, PlaySetup } from './types';
-import { DEFAULT_SETUP } from './types';
+import { activeSeatSides, DEFAULT_SETUP } from './types';
 
 interface CreateResponse {
 	game_id: number;
@@ -60,16 +60,22 @@ export class LocalController implements PlayController {
 				wasm.destroy_interactive_game(this.#gameId);
 				this.#gameId = null;
 			}
-			// Strategy name per seat: Human seats still need a placeholder in
-			// the engine's strategy array (it's indexed by player) but will
-			// never be invoked — human turns flow through `apply_action`.
-			const strategy_names = setup.seats.map((s) =>
-				s.type === 'Bot' ? s.strategy : 'Random'
-			);
+			// Build contiguous arrays for active seats only. `seats` carries
+			// the board side (color) for each engine player so the core
+			// can set up starts / homes on the right sides of the board.
+			// Human seats still need a placeholder strategy name (the
+			// engine indexes by player) but the strategy is never invoked
+			// for them; human turns flow through `apply_action`.
+			const sides = activeSeatSides(setup);
+			const strategy_names = sides.map((side) => {
+				const seat = setup.seats[side];
+				return seat.type === 'Bot' ? seat.strategy : 'Random';
+			});
 			const created = parseJsonOrThrow<CreateResponse>(
 				wasm.create_interactive_game(
 					JSON.stringify({
 						strategy_names,
+						seats: sides,
 						seed: Math.floor(Math.random() * 1_000_000_000),
 						rules: setup.rules
 					})

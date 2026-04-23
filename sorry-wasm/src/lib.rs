@@ -32,6 +32,22 @@ fn make_rules(name: &str) -> Result<Box<dyn Rules>, String> {
     }
 }
 
+fn make_rules_with_seats(name: &str, seats: Option<&Vec<u8>>) -> Result<Box<dyn Rules>, String> {
+    let play_out = match name {
+        "Standard" | "" => false,
+        "PlayOut" => true,
+        other => return Err(format!("unknown rules variant: {other}")),
+    };
+    match seats {
+        None => Ok(Box::new(if play_out {
+            StandardRules::new_play_out()
+        } else {
+            StandardRules::new()
+        })),
+        Some(s) => Ok(Box::new(StandardRules::with_seat_sides(s.clone(), play_out))),
+    }
+}
+
 fn make_rules_factory(name: &str) -> Result<Box<dyn Fn() -> Box<dyn Rules>>, String> {
     match name {
         "Standard" | "" => Ok(Box::new(|| Box::new(StandardRules::new()))),
@@ -110,6 +126,11 @@ struct CreateInteractiveConfig {
     rules: Option<String>,
     #[serde(default)]
     max_turns: Option<usize>,
+    /// Optional board-side per engine player. Length must equal
+    /// `strategy_names.len()`. Each value in `0..4` and distinct.
+    /// Omit for the standard contiguous `[0, 1, 2, 3]` mapping.
+    #[serde(default)]
+    seats: Option<Vec<u8>>,
 }
 
 #[derive(Serialize)]
@@ -305,7 +326,16 @@ pub fn create_interactive_game(config_json: &str) -> String {
         let cfg: CreateInteractiveConfig = serde_json::from_str(config_json)
             .map_err(|e| format!("invalid config: {e}"))?;
         let rules_name = cfg.rules.as_deref().unwrap_or("Standard");
-        let rules = make_rules(rules_name)?;
+        if let Some(seats) = &cfg.seats {
+            if seats.len() != cfg.strategy_names.len() {
+                return Err(format!(
+                    "seats length {} must match strategy_names length {}",
+                    seats.len(),
+                    cfg.strategy_names.len()
+                ));
+            }
+        }
+        let rules = make_rules_with_seats(rules_name, cfg.seats.as_ref())?;
         let mut game =
             InteractiveGame::new_with_strategy_names(rules, cfg.strategy_names, cfg.seed)
                 .map_err(|e| e.to_string())?;
