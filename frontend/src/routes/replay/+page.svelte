@@ -92,24 +92,34 @@
 	}
 
 	function stepBack() {
-		if (!cursor || animating) return;
+		if (!cursor) return;
 		const state = cursor.stepBack();
 		if (!state) return;
-		viewState = state;
-		cursorIndex = cursor.index;
-		lastStep = undefined; // snap, no animation
-		lastBeat = null;
-		lastAnnouncement = '';
+		snapTo(state);
 	}
 
 	function jumpTo(index: number) {
-		if (!cursor || animating) return;
-		const state = cursor.jumpTo(index);
+		if (!cursor) return;
+		snapTo(cursor.jumpTo(index));
+	}
+
+	/**
+	 * Apply a state as an instant snap (no animation). Cancels any
+	 * in-flight step animation by clearing `lastStep` so the renderer's
+	 * `setState` goes down the no-record path (animator.cancel +
+	 * snapPawns) instead of queuing on top of whatever was playing.
+	 * Also resets `animating` since the canceled animation's onDone
+	 * won't fire, and pauses auto-play so a scrub doesn't keep running
+	 * forward from the new position.
+	 */
+	function snapTo(state: ReplayState) {
 		viewState = state;
-		cursorIndex = cursor.index;
+		cursorIndex = cursor!.index;
 		lastStep = undefined;
 		lastBeat = null;
 		lastAnnouncement = '';
+		animating = false;
+		autoPlay = false;
 	}
 
 	function onStepEnd(_step: StepCommand) {
@@ -251,10 +261,10 @@
 				</button>
 			</div>
 			<div class="group" aria-label="Playback">
-				<button onclick={() => jumpTo(0)} disabled={!cursor || cursorIndex === 0 || animating}>
+				<button onclick={() => jumpTo(0)} disabled={!cursor || cursorIndex === 0}>
 					⏮
 				</button>
-				<button onclick={stepBack} disabled={!cursor || cursorIndex === 0 || animating}>
+				<button onclick={stepBack} disabled={!cursor || cursorIndex === 0}>
 					◀
 				</button>
 				<button
@@ -273,7 +283,7 @@
 				</button>
 				<button
 					onclick={() => cursor && jumpTo(cursor.length)}
-					disabled={!cursor || cursor.isAtEnd || animating}
+					disabled={!cursor || cursor.isAtEnd}
 				>
 					⏭
 				</button>
@@ -328,7 +338,7 @@
 			min="0"
 			max={cursorLength}
 			value={cursorIndex}
-			disabled={!cursor || animating}
+			disabled={!cursor}
 			aria-label="Scrub to play"
 			oninput={(e) => jumpTo(Number((e.target as HTMLInputElement).value))}
 		/>
