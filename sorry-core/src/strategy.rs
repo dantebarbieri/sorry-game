@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use crate::board::{PlayerId, SpaceId};
 use crate::card::Card;
 use crate::moves::Move;
+use crate::rules::Rules;
 
 /// Public information available to a strategy when it is asked to make a
 /// decision. Sorry! has no hidden state (all pawn positions are public), so
@@ -22,6 +23,13 @@ pub struct StrategyView {
     pub discard: Vec<Card>,
     pub deck_remaining: usize,
     pub current_player_turn: PlayerId,
+    /// The most recent player to have a pawn bumped back to their Start
+    /// area — by any means (normal landing bump, slide traversal, or a
+    /// Sorry card). Set once per game start to `None` and overwritten as
+    /// bumps happen. Used by strategies like `Sidekick` that target a
+    /// recently-weakened opponent.
+    #[serde(default)]
+    pub last_bump_victim: Option<PlayerId>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,8 +60,8 @@ pub trait Strategy: Send + Sync {
 
     /// Only invoked when `Rules::hand_size() > 1`. Returns an index into
     /// `view.hand`. Default implementation plays the first card.
-    fn choose_card(&self, view: &StrategyView, rng: &mut dyn RngCore) -> usize {
-        let _ = (view, rng);
+    fn choose_card(&self, view: &StrategyView, rules: &dyn Rules, rng: &mut dyn RngCore) -> usize {
+        let _ = (view, rules, rng);
         0
     }
 
@@ -62,6 +70,7 @@ pub trait Strategy: Send + Sync {
     fn choose_move(
         &self,
         view: &StrategyView,
+        rules: &dyn Rules,
         card: Card,
         legal: &[Move],
         rng: &mut dyn RngCore,

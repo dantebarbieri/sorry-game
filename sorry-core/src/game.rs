@@ -28,6 +28,10 @@ pub struct Game {
     current: PlayerId,
     over: bool,
     max_turns: usize,
+    /// Player most recently knocked back to Start by any bump (landing,
+    /// slide, or Sorry). `None` until the first bump of the game.
+    /// Surfaced to strategies via `StrategyView::last_bump_victim`.
+    last_bump_victim: Option<PlayerId>,
 }
 
 const DEFAULT_MAX_TURNS: usize = 5_000;
@@ -99,6 +103,7 @@ impl Game {
             current: starting_player,
             over: false,
             max_turns: DEFAULT_MAX_TURNS,
+            last_bump_victim: None,
         })
     }
 
@@ -151,8 +156,11 @@ impl Game {
             } else {
                 self.hands[self.current.0 as usize].push(card);
                 let view = self.view_for_current(None);
-                let idx =
-                    self.strategies[self.current.0 as usize].choose_card(&view, &mut self.rng);
+                let idx = self.strategies[self.current.0 as usize].choose_card(
+                    &view,
+                    &*self.rules,
+                    &mut self.rng,
+                );
                 let idx = idx.min(self.hands[self.current.0 as usize].len() - 1);
                 let chosen = self.hands[self.current.0 as usize].remove(idx);
                 turn.actions.push(Action::ChooseCard {
@@ -167,6 +175,7 @@ impl Game {
             let view = self.view_for_current(Some(chosen));
             let chosen_move = self.strategies[self.current.0 as usize].choose_move(
                 &view,
+                &*self.rules,
                 chosen,
                 &legal,
                 &mut self.rng,
@@ -188,6 +197,16 @@ impl Game {
                     discard: &mut self.discard,
                 };
                 engine.commit_play(self.current, chosen, &chosen_move, &mut turn)?;
+            }
+            // Any bumps emitted by the play update the most-recent-victim
+            // marker used by Sidekick. Read the last Play action (just
+            // pushed by commit_play) and take the final bump's victim — a
+            // slide-through-multiple-pawns leaves the furthest-along bump
+            // last, which is a reasonable "freshest victim" definition.
+            if let Some(Action::Play { bumps, .. }) = turn.actions.last()
+                && let Some(last) = bumps.last()
+            {
+                self.last_bump_victim = Some(last.player);
             }
 
             // Check for winner in the middle of the turn — if we just won, don't
@@ -249,6 +268,7 @@ impl Game {
             discard: self.discard.clone(),
             deck_remaining: self.deck.len(),
             current_player_turn: self.current,
+            last_bump_victim: self.last_bump_victim,
         }
     }
 }

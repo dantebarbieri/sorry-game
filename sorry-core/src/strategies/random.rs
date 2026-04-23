@@ -3,6 +3,7 @@ use rand::seq::SliceRandom;
 
 use crate::card::Card;
 use crate::moves::Move;
+use crate::rules::Rules;
 use crate::strategy::{Complexity, Strategy, StrategyDescription, StrategyView};
 
 #[derive(Debug, Default, Clone, Copy)]
@@ -21,7 +22,7 @@ impl Strategy for RandomStrategy {
         }
     }
 
-    fn choose_card(&self, view: &StrategyView, rng: &mut dyn RngCore) -> usize {
+    fn choose_card(&self, view: &StrategyView, _rules: &dyn Rules, rng: &mut dyn RngCore) -> usize {
         if view.hand.is_empty() {
             0
         } else {
@@ -32,6 +33,7 @@ impl Strategy for RandomStrategy {
     fn choose_move(
         &self,
         _view: &StrategyView,
+        _rules: &dyn Rules,
         _card: Card,
         legal: &[Move],
         rng: &mut dyn RngCore,

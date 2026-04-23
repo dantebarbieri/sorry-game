@@ -12,9 +12,10 @@ use serde::{Deserialize, Serialize};
 use wasm_bindgen::prelude::*;
 
 use sorry_core::{
-    AggregateStats, BoardGeometry, Game, GameHistory, GameStats, InteractiveGame,
-    InteractiveGameState, PlayerAction, PlayerId, RandomStrategy, Rules, Simulator,
-    SimulatorConfig, StandardRules, Strategy, StrategyDescription,
+    AggregateStats, BoardGeometry, Game, GameHistory, GameStats, GreedyStrategy, InteractiveGame,
+    InteractiveGameState, LoserStrategy, NotSorryStrategy, PlayerAction, PlayerId, RandomStrategy,
+    ReverseStrategy, Rules, SidekickStrategy, Simulator, SimulatorConfig, StandardRules, Strategy,
+    StrategyDescription, SurvivorStrategy, TeleporterStrategy,
 };
 
 // ─── Registries ───────────────────────────────────────────────────────
@@ -59,6 +60,13 @@ fn make_rules_factory(name: &str) -> Result<Box<dyn Fn() -> Box<dyn Rules>>, Str
 fn make_strategy(name: &str) -> Result<Box<dyn Strategy>, String> {
     match name {
         "Random" => Ok(Box::new(RandomStrategy)),
+        "Greedy" => Ok(Box::new(GreedyStrategy)),
+        "Not Sorry" => Ok(Box::new(NotSorryStrategy)),
+        "Survivor" => Ok(Box::new(SurvivorStrategy)),
+        "Reverse" => Ok(Box::new(ReverseStrategy)),
+        "Teleporter" => Ok(Box::new(TeleporterStrategy)),
+        "Sidekick" => Ok(Box::new(SidekickStrategy)),
+        "Loser" => Ok(Box::new(LoserStrategy)),
         other => Err(format!("unknown strategy: {other}")),
     }
 }
@@ -66,12 +74,28 @@ fn make_strategy(name: &str) -> Result<Box<dyn Strategy>, String> {
 fn make_strategy_factory(name: &str) -> Result<Box<dyn Fn() -> Box<dyn Strategy>>, String> {
     match name {
         "Random" => Ok(Box::new(|| Box::new(RandomStrategy))),
+        "Greedy" => Ok(Box::new(|| Box::new(GreedyStrategy))),
+        "Not Sorry" => Ok(Box::new(|| Box::new(NotSorryStrategy))),
+        "Survivor" => Ok(Box::new(|| Box::new(SurvivorStrategy))),
+        "Reverse" => Ok(Box::new(|| Box::new(ReverseStrategy))),
+        "Teleporter" => Ok(Box::new(|| Box::new(TeleporterStrategy))),
+        "Sidekick" => Ok(Box::new(|| Box::new(SidekickStrategy))),
+        "Loser" => Ok(Box::new(|| Box::new(LoserStrategy))),
         other => Err(format!("unknown strategy: {other}")),
     }
 }
 
 const AVAILABLE_RULES: &[&str] = &["Standard", "PlayOut"];
-const AVAILABLE_STRATEGIES: &[&str] = &["Random"];
+const AVAILABLE_STRATEGIES: &[&str] = &[
+    "Random",
+    "Greedy",
+    "Not Sorry",
+    "Survivor",
+    "Reverse",
+    "Teleporter",
+    "Sidekick",
+    "Loser",
+];
 
 // ─── DTOs ─────────────────────────────────────────────────────────────
 
@@ -326,14 +350,14 @@ pub fn create_interactive_game(config_json: &str) -> String {
         let cfg: CreateInteractiveConfig = serde_json::from_str(config_json)
             .map_err(|e| format!("invalid config: {e}"))?;
         let rules_name = cfg.rules.as_deref().unwrap_or("Standard");
-        if let Some(seats) = &cfg.seats {
-            if seats.len() != cfg.strategy_names.len() {
-                return Err(format!(
-                    "seats length {} must match strategy_names length {}",
-                    seats.len(),
-                    cfg.strategy_names.len()
-                ));
-            }
+        if let Some(seats) = &cfg.seats
+            && seats.len() != cfg.strategy_names.len()
+        {
+            return Err(format!(
+                "seats length {} must match strategy_names length {}",
+                seats.len(),
+                cfg.strategy_names.len()
+            ));
         }
         let rules = make_rules_with_seats(rules_name, cfg.seats.as_ref())?;
         let mut game =

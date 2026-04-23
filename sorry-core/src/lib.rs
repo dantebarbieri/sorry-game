@@ -39,5 +39,8 @@ pub use interactive::{
 pub use moves::{BumpEvent, Move, SlideEvent, SplitLeg, apply_move, legal_moves};
 pub use rules::{Rules, SlidePath, StandardRules};
 pub use simulator::{AggregateStats, GameStats, Simulator, SimulatorConfig};
-pub use strategies::RandomStrategy;
+pub use strategies::{
+    GreedyStrategy, LoserStrategy, NotSorryStrategy, RandomStrategy, ReverseStrategy,
+    SidekickStrategy, SurvivorStrategy, TeleporterStrategy,
+};
 pub use strategy::{Complexity, Strategy, StrategyDescription, StrategyView};

@@ -134,6 +134,8 @@ pub struct InteractiveGame {
     /// Accumulates this player's turn. `Some` while the game is mid-turn;
     /// `None` once `action_needed` is `GameOver`.
     current_turn: Option<TurnRecord>,
+    /// Most recent player bumped to Start. Mirrors `Game::last_bump_victim`.
+    last_bump_victim: Option<PlayerId>,
 }
 
 impl InteractiveGame {
@@ -210,6 +212,7 @@ impl InteractiveGame {
                 truncated: false,
             },
             current_turn: None,
+            last_bump_victim: None,
         };
         game.begin_turn_or_game_over()?;
         Ok(game)
@@ -294,6 +297,11 @@ impl InteractiveGame {
                         discard: &mut self.discard,
                     };
                     engine.commit_play(player, card, &mv, turn)?;
+                    if let Some(Action::Play { bumps, .. }) = turn.actions.last()
+                        && let Some(last) = bumps.last()
+                    {
+                        self.last_bump_victim = Some(last.player);
+                    }
                 }
                 self.on_play_committed(player, card)?;
                 Ok(&self.action_needed)
@@ -323,7 +331,7 @@ impl InteractiveGame {
             ActionNeeded::GameOver { .. } => Err(SorryError::GameAlreadyOver),
             ActionNeeded::ChooseCard { player, hand, .. } => {
                 let view = self.build_strategy_view(player, None);
-                let idx = strategy.choose_card(&view, &mut self.rng);
+                let idx = strategy.choose_card(&view, &*self.rules, &mut self.rng);
                 let idx = idx.min(hand.len().saturating_sub(1));
                 Ok(PlayerAction::ChooseCard { hand_index: idx })
             }
@@ -333,7 +341,7 @@ impl InteractiveGame {
                 legal_moves: legal,
             } => {
                 let view = self.build_strategy_view(player, Some(card));
-                let mv = strategy.choose_move(&view, card, &legal, &mut self.rng);
+                let mv = strategy.choose_move(&view, &*self.rules, card, &legal, &mut self.rng);
                 Ok(PlayerAction::PlayMove { mv })
             }
         }
@@ -541,6 +549,7 @@ impl InteractiveGame {
             discard: self.discard.clone(),
             deck_remaining: self.deck.len(),
             current_player_turn: self.current,
+            last_bump_victim: self.last_bump_victim,
         }
     }
 
