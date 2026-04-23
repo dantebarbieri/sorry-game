@@ -30,9 +30,29 @@ export interface MetaResponse {
 	available_strategies: string[];
 }
 
+// Resolution order for the default server URL:
+//   1. `VITE_SERVER_URL` (build-time override, baked into the bundle).
+//   2. In Vite dev mode → `http://localhost:8080` so `pnpm dev` pairs with a
+//      locally-running `cargo run` server on the SvelteKit-adjacent port.
+//   3. In a browser → `window.location.origin`, so a production deploy served
+//      at `https://sorry.example.com` talks to its own nginx, which proxies
+//      `/api/*` back to the sorry-server container.
+//   4. SSR / non-browser fallback → `http://localhost:8080`.
+const viteEnv =
+	typeof import.meta !== 'undefined'
+		? (import.meta as unknown as {
+				env?: { VITE_SERVER_URL?: string; DEV?: boolean };
+			}).env
+		: undefined;
+
 export const DEFAULT_SERVER_URL =
-	(typeof import.meta !== 'undefined' && (import.meta as unknown as { env?: { VITE_SERVER_URL?: string } }).env?.VITE_SERVER_URL) ||
-	'http://localhost:8080';
+	viteEnv?.VITE_SERVER_URL && viteEnv.VITE_SERVER_URL.trim() !== ''
+		? viteEnv.VITE_SERVER_URL
+		: viteEnv?.DEV
+			? 'http://localhost:8080'
+			: typeof window !== 'undefined'
+				? window.location.origin
+				: 'http://localhost:8080';
 
 async function rpc<T>(method: string, path: string, body?: unknown, base: string = DEFAULT_SERVER_URL): Promise<T> {
 	let res: Response;

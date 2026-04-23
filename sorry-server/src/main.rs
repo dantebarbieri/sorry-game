@@ -10,14 +10,16 @@ use sorry_server::{AppStateInner, build_app, lobby::Lobby};
 #[derive(Parser)]
 #[command(name = "sorry-server")]
 struct Args {
-    /// Port to listen on.
-    #[arg(long, default_value = "8080")]
+    /// Port to listen on. Also reads `SORRY_PORT`.
+    #[arg(long, env = "SORRY_PORT", default_value = "8080")]
     port: u16,
 
-    /// Origin allowed by CORS. Pass "*" for any, or a full origin like
-    /// "http://localhost:5173" for the SvelteKit dev server. Omit to disable
-    /// CORS entirely (same-origin only).
-    #[arg(long, default_value = "http://localhost:5173")]
+    /// Origin allowed by CORS. Pass "*" for any, a full origin like
+    /// "http://localhost:5173" for the SvelteKit dev server, or an empty
+    /// string / "none" to disable CORS entirely (for same-origin deploys
+    /// where nginx proxies the API under the same host as the frontend).
+    /// Also reads `SORRY_CORS_ORIGIN`.
+    #[arg(long, env = "SORRY_CORS_ORIGIN", default_value = "http://localhost:5173")]
     cors_origin: String,
 }
 

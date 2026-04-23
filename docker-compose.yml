@@ -1,0 +1,52 @@
+# Local / standalone deployment for sorry-game.
+#
+#   docker compose up -d --build
+#   open http://localhost:${SORRY_FRONTEND_PORT:-8080}
+#
+# Production (homeserver): use `compose.websites.yml` in the HomeServer
+# monorepo instead — that file wires these two services onto the `proxy`
+# network Nginx Proxy Manager shares with the rest of danteb.com.
+
+name: sorry
+
+services:
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend.Dockerfile
+      args:
+        # Leave empty → bundle uses window.location.origin at runtime, and
+        # nginx inside the container proxies /api/* to the backend. Set to
+        # a full origin if you want the bundle to hit a different host.
+        VITE_SERVER_URL: ${VITE_SERVER_URL:-}
+    image: sorry-frontend
+    container_name: sorry-frontend
+    restart: unless-stopped
+    ports:
+      - "${SORRY_FRONTEND_PORT:-8080}:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    networks:
+      - sorry
+
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend.Dockerfile
+    image: sorry-server
+    container_name: sorry-server
+    restart: unless-stopped
+    environment:
+      SORRY_PORT: "8080"
+      # Same-origin deploy: nginx proxies /api/* so no CORS preflight happens.
+      # Override to e.g. "*" or a specific origin for cross-host dev.
+      SORRY_CORS_ORIGIN: ${SORRY_CORS_ORIGIN:-}
+      RUST_LOG: ${RUST_LOG:-sorry_server=info,tower_http=info}
+    networks:
+      sorry:
+        aliases:
+          - backend
+
+networks:
+  sorry:
