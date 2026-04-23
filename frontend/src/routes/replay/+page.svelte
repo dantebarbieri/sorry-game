@@ -56,8 +56,7 @@
 					JSON.stringify({
 						seed,
 						strategies: ['Random', 'Random', 'Random', 'Random'],
-						rules: ruleset,
-						max_turns: 500
+						rules: ruleset
 					})
 				)
 			);
@@ -315,6 +314,11 @@
 						</li>
 					{/each}
 				</ol>
+			</div>
+		{:else if gameOverState && gameOverState.truncated}
+			<div class="placement-banner" role="status" aria-live="polite">
+				<h2>Truncated</h2>
+				<p>The game hit the turn limit before any player could finish.</p>
 			</div>
 		{/if}
 	</div>
