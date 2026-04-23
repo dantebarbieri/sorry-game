@@ -197,11 +197,28 @@
 			name: PLAYER_NAMES[lastBeat.player] ?? `P${lastBeat.player}`
 		};
 	});
-	const gameOverState = $derived.by(() => {
-		const s = viewState;
-		if (!s) return null;
-		if (s.winners.length === 0 && !s.truncated) return null;
-		return { winners: s.winners, truncated: s.truncated };
+	/** True once the replay cursor is at the very end of the history. In
+	 *  Play Out this is when the last-place finisher has been appended
+	 *  by `finalize_winners`; in Standard it's the instant the winner
+	 *  lands their last pawn. */
+	const isAtGameEnd = $derived.by(() => {
+		if (!cursor || !history) return false;
+		return cursor.isAtEnd && (history.winners.length > 0 || history.truncated);
+	});
+
+	/** Winners to render in the placements panel. While mid-replay, use
+	 *  viewState's progressively-built list (only truly-home finishers).
+	 *  At the end, switch to history.winners so Play Out's last-place
+	 *  (appended by `finalize_winners`) appears too. */
+	const displayWinners = $derived.by<number[]>(() => {
+		if (isAtGameEnd && history) return history.winners;
+		return viewState?.winners ?? [];
+	});
+
+	const placementsTitle = $derived(isAtGameEnd ? 'Final placement' : 'Placements');
+
+	const truncatedAtEnd = $derived.by(() => {
+		return isAtGameEnd && history?.truncated === true && history.winners.length === 0;
 	});
 </script>
 
@@ -257,7 +274,7 @@
 					⏮
 				</button>
 				<button onclick={stepBack} disabled={!cursor || cursorIndex === 0}>
-					◀
+					|◀
 				</button>
 				<button
 					onclick={toggleAutoPlay}
@@ -299,16 +316,11 @@
 				onStepEnd={onStepEnd}
 			/>
 		{/if}
-		{#if gameOverState && gameOverState.winners.length > 0}
-			<div
-				class="placement-banner"
-				role="status"
-				aria-live="polite"
-				aria-label="Final placements"
-			>
-				<h2>Final placement</h2>
+		{#if displayWinners.length > 0}
+			<div class="placements" role="status" aria-live="polite" aria-label={placementsTitle}>
+				<h2>{placementsTitle}</h2>
 				<ol>
-					{#each gameOverState.winners as player, i (player)}
+					{#each displayWinners as player, i (player)}
 						<li style:color={currentSkin.palette.players[player] ?? '#e8ecf2'}>
 							<span class="ordinal">{PLACEMENT_ORDINAL[i] ?? `${i + 1}th`}</span>
 							<span class="name">{PLAYER_NAMES[player] ?? `P${player}`}</span>
@@ -316,8 +328,8 @@
 					{/each}
 				</ol>
 			</div>
-		{:else if gameOverState && gameOverState.truncated}
-			<div class="placement-banner" role="status" aria-live="polite">
+		{:else if truncatedAtEnd}
+			<div class="placements" role="status" aria-live="polite">
 				<h2>Truncated</h2>
 				<p>The game hit the turn limit before any player could finish.</p>
 			</div>
@@ -448,34 +460,42 @@
 	.error {
 		color: #ff6b6b;
 	}
-	.placement-banner {
+	.placements {
 		position: absolute;
-		top: 50%;
-		left: 50%;
-		transform: translate(-50%, -50%);
-		background: rgba(14, 20, 28, 0.92);
+		top: 0.75rem;
+		right: 0.75rem;
+		background: rgba(14, 20, 28, 0.88);
 		border: 1px solid #334258;
-		border-radius: 0.5rem;
-		padding: 1.2rem 2rem;
-		text-align: center;
+		border-radius: 0.4rem;
+		padding: 0.55rem 0.8rem;
+		font-size: 0.85rem;
+		min-width: 9rem;
+		pointer-events: none;
 	}
-	.placement-banner h2 {
-		margin: 0 0 0.6rem;
-		font-size: 1.1rem;
+	.placements h2 {
+		margin: 0 0 0.35rem;
+		font-size: 0.8rem;
+		font-weight: 600;
+		color: #98a4b4;
+		text-transform: uppercase;
+		letter-spacing: 0.04em;
 	}
-	.placement-banner ol {
+	.placements ol {
 		margin: 0;
 		padding: 0;
 		list-style: none;
 		display: flex;
 		flex-direction: column;
-		gap: 0.25rem;
+		gap: 0.15rem;
 	}
-	.placement-banner li {
+	.placements li {
 		display: flex;
-		gap: 0.5rem;
-		justify-content: center;
+		gap: 0.4rem;
 		font-weight: 600;
+	}
+	.placements p {
+		margin: 0;
+		font-size: 0.8rem;
 	}
 	.ordinal {
 		opacity: 0.7;
