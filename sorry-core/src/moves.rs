@@ -190,8 +190,13 @@ pub fn legal_moves(
                     let Some(to_b) = walk_forward(rules, player, from_b, b as i8) else {
                         continue;
                     };
-                    if !is_landable(rules, board, player, to_a)
-                        || !is_landable(rules, board, player, to_b)
+                    // Landability must treat both split pawns as "in motion" —
+                    // either's destination may equal the other's starting
+                    // space (e.g., leg 1 sends pawn A home, freeing its
+                    // safety square for leg 2's pawn B to occupy).
+                    let split_pawns = [pawn_a, pawn_b];
+                    if !is_landable_excluding(rules, board, player, to_a, &split_pawns)
+                        || !is_landable_excluding(rules, board, player, to_b, &split_pawns)
                     {
                         continue;
                     }
@@ -326,6 +331,28 @@ fn is_landable(rules: &dyn Rules, board: &BoardState, player: PlayerId, to: Spac
         return true;
     }
     !is_own_pawn_at(board, player, to)
+}
+
+/// Like [`is_landable`], but treats the listed own pawns as "in motion" so
+/// their current squares count as vacant. Used for split-7 where both
+/// legs happen in the same move — leg B's destination may be leg A's
+/// starting square, which is legal because leg A leaves first.
+fn is_landable_excluding(
+    rules: &dyn Rules,
+    board: &BoardState,
+    player: PlayerId,
+    to: SpaceId,
+    moving: &[PawnId],
+) -> bool {
+    if matches!(rules.classify(to), Some(Space::Home(_))) {
+        return true;
+    }
+    for (p, pawn) in board.pawns_at(to) {
+        if p == player && !moving.contains(&pawn) {
+            return false;
+        }
+    }
+    true
 }
 
 fn walk_forward(rules: &dyn Rules, player: PlayerId, from: SpaceId, steps: i8) -> Option<SpaceId> {
