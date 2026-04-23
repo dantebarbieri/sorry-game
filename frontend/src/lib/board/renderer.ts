@@ -365,6 +365,18 @@ export class BoardRenderer {
 	}
 
 	/**
+	 * Turn pointer-driven picking on or off. Replay mode passes `false`
+	 * so raycasts aren't wasted on pointer moves and no pick callback
+	 * can ever fire — a hard guarantee that a replay consumer can't
+	 * accidentally receive interactive events.
+	 */
+	setInteractionEnabled(enabled: boolean): void {
+		if (!this.interaction) return;
+		if (enabled) this.interaction.attach();
+		else this.interaction.detach();
+	}
+
+	/**
 	 * Replace the highlight overlay with rings over `destinations`, an
 	 * optional halo under `selectedPawn` (the pawn you're currently
 	 * picking a target for), and an optional halo + ring for a locked-in

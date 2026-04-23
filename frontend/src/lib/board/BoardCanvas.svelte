@@ -46,6 +46,16 @@
 		lastStep?: StepCommand;
 		cameraCommand?: CameraCommand;
 		highlights?: HighlightState;
+		/**
+		 * `live` (default) — pointer picking attaches, `onPick` / `onHover`
+		 * may fire. `replay` — pointer picking is detached; passing
+		 * `onPick` or `onHover` in `replay` mode is a bug and produces a
+		 * dev-time warning. The mode exists so a replay consumer has a
+		 * hard guarantee that no interactive event can escape back into
+		 * its state — a stray click should do nothing, not dispatch a
+		 * move to a history that's already written.
+		 */
+		mode?: 'live' | 'replay';
 		onUserOrbit?: () => void;
 		/** Fires when a queued step's animation actually begins. */
 		onStepStart?: (step: StepCommand) => void;
@@ -63,6 +73,7 @@
 		lastStep,
 		cameraCommand,
 		highlights,
+		mode = 'live',
 		onUserOrbit,
 		onStepStart,
 		onStepEnd,
@@ -131,11 +142,28 @@
 	});
 
 	$effect(() => {
-		if (renderer) renderer.setPickHandler(onPick ?? null);
+		if (!renderer) return;
+		// In replay mode, explicitly clear any handler even if the caller
+		// provides one. The interaction is also detached below (no raycasts)
+		// so this is belt-and-suspenders.
+		renderer.setPickHandler(mode === 'replay' ? null : (onPick ?? null));
 	});
 
 	$effect(() => {
-		if (renderer) renderer.setHoverHandler(onHover ?? null);
+		if (!renderer) return;
+		renderer.setHoverHandler(mode === 'replay' ? null : (onHover ?? null));
+	});
+
+	$effect(() => {
+		if (!renderer) return;
+		renderer.setInteractionEnabled(mode !== 'replay');
+		if (mode === 'replay' && (onPick || onHover)) {
+			console.warn(
+				'[BoardCanvas] mode="replay" was passed alongside onPick/onHover. ' +
+					'Replay consumers must not wire interactive handlers — the renderer ' +
+					'ignores them and detaches pointer listeners.'
+			);
+		}
 	});
 
 	$effect(() => {

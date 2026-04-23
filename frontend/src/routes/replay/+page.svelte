@@ -42,38 +42,111 @@
 	let lastAnnouncement = $state('');
 	let error = $state<string | null>(null);
 	let loading = $state(true);
+	// Per-seat strategy selection for generating a new random game. Today
+	// the engine ships only "Random", so all four default to that — the
+	// state + UI are here to accept future strategies (Greedy, MCTS, etc.)
+	// without a layout rewrite.
+	let availableStrategies = $state<string[]>(['Random']);
+	let seatStrategies = $state<string[]>(['Random', 'Random', 'Random', 'Random']);
+	let setupOpen = $state(false);
+	let importError = $state<string | null>(null);
+	let fileInput: HTMLInputElement | undefined = $state();
+
+	async function ensureGeometry() {
+		if (geometry) return geometry;
+		const wasm = await loadWasm();
+		geometry = parseJsonOrThrow<BoardGeometry>(wasm.get_board_geometry('Standard'));
+		return geometry;
+	}
+
+	async function ensureAvailableStrategies() {
+		try {
+			const wasm = await loadWasm();
+			const names = parseJsonOrThrow<string[]>(wasm.get_available_strategies());
+			if (Array.isArray(names) && names.length > 0) availableStrategies = names;
+		} catch {
+			/* keep ['Random'] fallback */
+		}
+	}
 
 	async function loadReplay() {
 		loading = true;
 		error = null;
 		try {
 			const wasm = await loadWasm();
-			if (!geometry) {
-				geometry = parseJsonOrThrow<BoardGeometry>(wasm.get_board_geometry('Standard'));
-			}
+			await ensureGeometry();
 			const res = parseJsonOrThrow<SimResponse>(
 				wasm.simulate_one_with_history(
 					JSON.stringify({
 						seed,
-						strategies: ['Random', 'Random', 'Random', 'Random'],
+						strategies: seatStrategies,
 						rules: ruleset
 					})
 				)
 			);
-			history = res.history;
-			const c = new HistoryCursor(res.history, geometry);
-			cursor = c;
-			cursorIndex = c.index;
-			cursorLength = c.length;
-			viewState = c.currentState;
-			lastStep = undefined;
-			lastBeat = null;
-			lastAnnouncement = '';
+			adoptHistory(res.history);
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);
 		} finally {
 			loading = false;
 		}
+	}
+
+	function adoptHistory(h: GameHistory) {
+		const geom = geometry;
+		if (!geom) throw new Error('geometry must be loaded before adopting a history');
+		history = h;
+		const c = new HistoryCursor(h, geom);
+		cursor = c;
+		cursorIndex = c.index;
+		cursorLength = c.length;
+		viewState = c.currentState;
+		lastStep = undefined;
+		lastBeat = null;
+		lastAnnouncement = '';
+		autoPlay = false;
+		animating = false;
+	}
+
+	async function importHistoryFile(file: File) {
+		importError = null;
+		loading = true;
+		try {
+			await ensureGeometry();
+			const text = await file.text();
+			const parsed = JSON.parse(text) as GameHistory;
+			if (!Array.isArray(parsed.turns) || !Array.isArray(parsed.initial_deck_order)) {
+				throw new Error('JSON is missing required GameHistory fields (turns, initial_deck_order)');
+			}
+			// Sync ruleset + seed so the footer reflects the imported game.
+			if (parsed.rules_name === 'PlayOut' || parsed.rules_name === 'Standard') {
+				ruleset = parsed.rules_name;
+			}
+			if (typeof parsed.seed === 'number') seed = parsed.seed;
+			adoptHistory(parsed);
+		} catch (e) {
+			importError = e instanceof Error ? e.message : String(e);
+		} finally {
+			loading = false;
+		}
+	}
+
+	function onImportInput(e: Event) {
+		const input = e.currentTarget as HTMLInputElement;
+		const file = input.files?.[0];
+		if (file) void importHistoryFile(file);
+		input.value = ''; // allow re-picking the same file
+	}
+
+	function exportHistory() {
+		if (!history) return;
+		const blob = new Blob([JSON.stringify(history, null, 2)], { type: 'application/json' });
+		const url = URL.createObjectURL(blob);
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = `sorry-${history.rules_name}-seed${history.seed}.json`;
+		a.click();
+		URL.revokeObjectURL(url);
 	}
 
 	function stepForward() {
@@ -179,6 +252,7 @@
 	}
 
 	onMount(() => {
+		void ensureAvailableStrategies();
 		void loadReplay();
 	});
 
@@ -263,6 +337,15 @@
 				>
 					New Play Out
 				</button>
+				<button
+					onclick={() => (setupOpen = !setupOpen)}
+					class:active={setupOpen}
+					aria-pressed={setupOpen}
+					aria-expanded={setupOpen}
+					title="Configure per-seat strategies and import/export history"
+				>
+					Setup
+				</button>
 			</div>
 			<div class="group" aria-label="Camera view">
 				<button onclick={() => pickView('edge')} class:active={activePreset === 'edge'}>
@@ -305,6 +388,53 @@
 			</div>
 		</div>
 	</header>
+	{#if setupOpen}
+		<div class="setup" role="region" aria-label="Replay setup">
+			<div class="setup-row">
+				<span class="setup-label">Strategies</span>
+				{#each [0, 1, 2, 3] as seat (seat)}
+					<div class="seat-picker">
+						<span class="seat-name" style:color={currentSkin.palette.players[seat]}>
+							{PLAYER_NAMES[seat]}
+						</span>
+						<select
+							value={seatStrategies[seat]}
+							onchange={(e) =>
+								(seatStrategies[seat] = (e.currentTarget as HTMLSelectElement).value)}
+							aria-label={`Strategy for ${PLAYER_NAMES[seat]}`}
+						>
+							{#each availableStrategies as name (name)}
+								<option value={name}>{name}</option>
+							{/each}
+						</select>
+					</div>
+				{/each}
+			</div>
+			<div class="setup-row">
+				<span class="setup-label">History</span>
+				<input
+					bind:this={fileInput}
+					type="file"
+					accept="application/json,.json"
+					onchange={onImportInput}
+					class="hidden-file"
+				/>
+				<button onclick={() => fileInput?.click()} title="Import a saved GameHistory JSON">
+					Import…
+				</button>
+				<button
+					onclick={exportHistory}
+					disabled={!history}
+					title="Download the current history as JSON"
+				>
+					Export
+				</button>
+				{#if importError}
+					<span class="import-error">Import failed: {importError}</span>
+				{/if}
+			</div>
+		</div>
+	{/if}
 	<div class="canvas-wrap">
 		{#if error}
 			<p class="msg error">Error: {error}</p>
@@ -318,6 +448,7 @@
 				{lastStep}
 				{cameraCommand}
 				{highlights}
+				mode="replay"
 				{onUserOrbit}
 				onStepEnd={onStepEnd}
 			/>
@@ -454,6 +585,49 @@
 		flex: 1;
 		min-height: 0;
 		position: relative;
+	}
+	.setup {
+		display: flex;
+		flex-direction: column;
+		gap: 0.4rem;
+		padding: 0.5rem 0.8rem;
+		background: #101821;
+		border-bottom: 1px solid #1d2835;
+		font-size: 0.85rem;
+	}
+	.setup-row {
+		display: flex;
+		align-items: center;
+		gap: 0.6rem;
+		flex-wrap: wrap;
+	}
+	.setup-label {
+		color: #98a4b4;
+		font-weight: 600;
+		min-width: 5rem;
+	}
+	.seat-picker {
+		display: flex;
+		align-items: center;
+		gap: 0.3rem;
+	}
+	.seat-name {
+		font-weight: 600;
+		min-width: 3.5rem;
+	}
+	.seat-picker select {
+		background: #1a2432;
+		color: #e8ecf2;
+		border: 1px solid #243042;
+		border-radius: 0.25rem;
+		padding: 0.15rem 0.4rem;
+		font-size: 0.85rem;
+	}
+	.hidden-file {
+		display: none;
+	}
+	.import-error {
+		color: #ff6b6b;
 	}
 	.msg {
 		position: absolute;
