@@ -42,6 +42,28 @@ export interface PlayRecord {
 	slides: SlideEvent[];
 }
 
+/** What the engine wants from the current player right now. Tagged enum
+ *  mirroring `ActionNeeded` in `sorry-core/src/interactive.rs`. */
+export type ActionNeeded =
+	| {
+			type: 'ChooseCard';
+			player: PlayerId;
+			hand: string[];
+			legal_card_indices: number[];
+	  }
+	| {
+			type: 'ChooseMove';
+			player: PlayerId;
+			card: string;
+			legal_moves: Move[];
+	  }
+	| { type: 'GameOver'; winners: PlayerId[]; truncated: boolean };
+
+/** Payload the caller hands to `apply_action`. */
+export type PlayerAction =
+	| { type: 'ChooseCard'; hand_index: number }
+	| { type: 'PlayMove'; mv: Move };
+
 export type HistoryAction =
 	| { type: 'Draw'; card: string }
 	| { type: 'ChooseCard'; hand_index: number; card: string }

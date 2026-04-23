@@ -4,12 +4,20 @@ import type { BoardSkin } from './skins';
 const TILE_SIZE = 0.19;
 const TILE_HEIGHT = 0.018;
 const START_RADIUS = 0.16;
-const HOME_RADIUS = 0.12;
+const HOME_RADIUS = 0.15;
 const SAFETY_INWARD = 0.15; // tighter than TILE_SIZE to fit the denser safety step
 const DECK_WIDTH = 0.26;
 const DECK_DEPTH = 0.36;
-const DECK_HEIGHT = 0.065;
-const DISCARD_HEIGHT = 0.025;
+// Per-card thickness — each card contributes the same vertical increment
+// to both the deck and discard stacks. With StandardRules' 45-card deck
+// that caps the deck at ~0.09 world units when full. Discards use the
+// same rate so the relationship is intuitive: as one shrinks, the other
+// grows at the same speed.
+const CARD_THICKNESS = 0.002;
+const MIN_STACK_HEIGHT = 0.006;
+const PICKER_RADIUS = 0.11;
+const HIGHLIGHT_INNER = 0.09;
+const HIGHLIGHT_OUTER = 0.13;
 
 export function boardBase(skin: BoardSkin, size = 4.2): THREE.Mesh {
 	const geom = new THREE.BoxGeometry(size, 0.06, size);
@@ -73,9 +81,15 @@ export function safetyChannelSegment(skin: BoardSkin, player: number): THREE.Mes
 	return mesh;
 }
 
-/** Face-down deck stack at the board center. Height implies card count. */
-export function deckStack(skin: BoardSkin): THREE.Mesh {
-	const geom = new THREE.BoxGeometry(DECK_WIDTH, DECK_HEIGHT, DECK_DEPTH);
+function stackHeight(cards: number): number {
+	if (cards <= 0) return 0;
+	return Math.max(MIN_STACK_HEIGHT, cards * CARD_THICKNESS);
+}
+
+/** Face-down deck stack. Height scales linearly with remaining card count. */
+export function deckStack(skin: BoardSkin, cards: number): THREE.Mesh {
+	const height = stackHeight(cards);
+	const geom = new THREE.BoxGeometry(DECK_WIDTH, height, DECK_DEPTH);
 	const deckColor = new THREE.Color(skin.palette.board).multiplyScalar(0.5);
 	const mat = new THREE.MeshStandardMaterial({
 		color: deckColor,
@@ -83,24 +97,169 @@ export function deckStack(skin: BoardSkin): THREE.Mesh {
 		metalness: 0.05
 	});
 	const mesh = new THREE.Mesh(geom, mat);
-	mesh.position.y = DECK_HEIGHT / 2;
+	mesh.position.y = height / 2;
 	mesh.castShadow = true;
 	mesh.receiveShadow = true;
 	return mesh;
 }
 
-/** Face-up discard pile — thinner than the deck, trackTile color as "card face". */
-export function discardStack(skin: BoardSkin): THREE.Mesh {
-	const geom = new THREE.BoxGeometry(DECK_WIDTH, DISCARD_HEIGHT, DECK_DEPTH);
-	const mat = new THREE.MeshStandardMaterial({
-		color: new THREE.Color(skin.palette.trackTile),
-		roughness: 0.72
+/**
+ * Invisible disk that catches pointer raycasts for a space. Rendered with
+ * visible = false so it contributes nothing visually but still participates
+ * in `Raycaster.intersectObjects`. Callers may pass a larger radius for
+ * stacking spaces (Start / Home) so the full colored disk is clickable.
+ */
+export function spacePicker(radius = PICKER_RADIUS): THREE.Mesh {
+	const geom = new THREE.CircleGeometry(radius, 24);
+	geom.rotateX(-Math.PI / 2);
+	const mat = new THREE.MeshBasicMaterial({ visible: false });
+	const mesh = new THREE.Mesh(geom, mat);
+	// Sit slightly above the board surface so raycasts hit the picker
+	// before any underlying geometry.
+	mesh.position.y = 0.01;
+	return mesh;
+}
+
+/**
+ * Flat ring decal shown on a legal destination square. Color matches the
+ * moving pawn's owner (picked by the caller). Rendered slightly above any
+ * tile mesh so it's always visible.
+ */
+export function destinationRing(color: THREE.ColorRepresentation): THREE.Mesh {
+	const geom = new THREE.RingGeometry(HIGHLIGHT_INNER, HIGHLIGHT_OUTER, 32);
+	geom.rotateX(-Math.PI / 2);
+	const mat = new THREE.MeshBasicMaterial({
+		color,
+		transparent: true,
+		opacity: 0.9,
+		side: THREE.DoubleSide,
+		depthWrite: false
 	});
 	const mesh = new THREE.Mesh(geom, mat);
-	mesh.position.y = DISCARD_HEIGHT / 2;
-	mesh.castShadow = true;
-	mesh.receiveShadow = true;
+	mesh.position.y = 0.035;
+	mesh.renderOrder = 10;
 	return mesh;
+}
+
+/**
+ * Halo disk drawn under a selected pawn to mark the current pick.
+ * Visually similar to a destination ring but filled.
+ */
+/**
+ * Filled disk used to mark the currently-focused destination (the one
+ * `Enter` would commit under keyboard nav). Visually more prominent than
+ * a ring so it reads as "primary" against the regular legal destinations.
+ */
+export function activeDestinationDisk(color: THREE.ColorRepresentation): THREE.Mesh {
+	const geom = new THREE.CircleGeometry(HIGHLIGHT_OUTER * 1.02, 36);
+	geom.rotateX(-Math.PI / 2);
+	const mat = new THREE.MeshBasicMaterial({
+		color,
+		transparent: true,
+		opacity: 0.7,
+		side: THREE.DoubleSide,
+		depthWrite: false
+	});
+	const mesh = new THREE.Mesh(geom, mat);
+	mesh.position.y = 0.036;
+	mesh.renderOrder = 11;
+	return mesh;
+}
+
+/**
+ * Dimmer, distinct ring used for a locked Split-7 first-leg destination so
+ * it reads as "already committed" rather than "pending your click."
+ */
+export function lockedDestinationRing(color: THREE.ColorRepresentation): THREE.Mesh {
+	const geom = new THREE.RingGeometry(HIGHLIGHT_OUTER * 0.85, HIGHLIGHT_OUTER * 1.05, 32);
+	geom.rotateX(-Math.PI / 2);
+	const mat = new THREE.MeshBasicMaterial({
+		color,
+		transparent: true,
+		opacity: 0.35,
+		side: THREE.DoubleSide,
+		depthWrite: false
+	});
+	const mesh = new THREE.Mesh(geom, mat);
+	mesh.position.y = 0.034;
+	mesh.renderOrder = 8;
+	return mesh;
+}
+
+export function selectionHalo(color: THREE.ColorRepresentation): THREE.Mesh {
+	const geom = new THREE.CircleGeometry(HIGHLIGHT_OUTER, 32);
+	geom.rotateX(-Math.PI / 2);
+	const mat = new THREE.MeshBasicMaterial({
+		color,
+		transparent: true,
+		opacity: 0.45,
+		side: THREE.DoubleSide,
+		depthWrite: false
+	});
+	const mesh = new THREE.Mesh(geom, mat);
+	mesh.position.y = 0.033;
+	mesh.renderOrder = 9;
+	return mesh;
+}
+
+/**
+ * Face-up discard pile. Height scales with discard size; if `topCardLabel`
+ * is provided (e.g. "5", "Sorry!"), a small face-up canvas texture is
+ * drawn on top showing the most recently discarded card.
+ */
+export function discardStack(
+	skin: BoardSkin,
+	cards: number,
+	topCardLabel?: string | null,
+	topCardColor?: string
+): THREE.Group {
+	const group = new THREE.Group();
+	const height = stackHeight(cards);
+	if (height > 0) {
+		const box = new THREE.BoxGeometry(DECK_WIDTH, height, DECK_DEPTH);
+		const boxMat = new THREE.MeshStandardMaterial({
+			color: new THREE.Color(skin.palette.trackTile),
+			roughness: 0.72
+		});
+		const boxMesh = new THREE.Mesh(box, boxMat);
+		boxMesh.position.y = height / 2;
+		boxMesh.castShadow = true;
+		boxMesh.receiveShadow = true;
+		group.add(boxMesh);
+	}
+
+	if (topCardLabel) {
+		const face = cardFacePlane(topCardLabel, topCardColor ?? '#222222');
+		face.position.y = height + 0.001;
+		group.add(face);
+	}
+	return group;
+}
+
+function cardFacePlane(label: string, color: string): THREE.Mesh {
+	const canvas = document.createElement('canvas');
+	canvas.width = 256;
+	canvas.height = 360;
+	const ctx = canvas.getContext('2d');
+	if (ctx) {
+		ctx.fillStyle = '#FBF6E7';
+		ctx.fillRect(0, 0, canvas.width, canvas.height);
+		ctx.strokeStyle = '#c7bda6';
+		ctx.lineWidth = 8;
+		ctx.strokeRect(4, 4, canvas.width - 8, canvas.height - 8);
+		ctx.fillStyle = color;
+		ctx.textAlign = 'center';
+		ctx.textBaseline = 'middle';
+		ctx.font = `bold ${label.length > 3 ? 96 : 180}px system-ui, sans-serif`;
+		ctx.fillText(label, canvas.width / 2, canvas.height / 2);
+	}
+	const texture = new THREE.CanvasTexture(canvas);
+	texture.colorSpace = THREE.SRGBColorSpace;
+	texture.needsUpdate = true;
+	const geom = new THREE.PlaneGeometry(DECK_WIDTH * 0.92, DECK_DEPTH * 0.92);
+	geom.rotateX(-Math.PI / 2);
+	const mat = new THREE.MeshBasicMaterial({ map: texture, transparent: false });
+	return new THREE.Mesh(geom, mat);
 }
 
 /**

@@ -1,28 +1,41 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 
-import type { BoardGeometry } from './geometry';
+import type { BoardGeometry, SpaceId } from './geometry';
 import { toPlanar, isTrack } from './geometry';
 import type { BoardSkin } from './skins';
 import type { GameStateView } from './state';
 import type { PlayRecord } from './actions';
 import { Animator } from './animator';
+import { Interaction, type PickHit } from './interaction';
+import { easeInOutCubic, tween } from './timeline';
 import {
+	activeDestinationDisk,
 	boardBase,
 	deckStack,
+	destinationRing,
 	discardStack,
 	homePocket,
+	lockedDestinationRing,
 	safetyChannelSegment,
+	selectionHalo,
 	slideRamp,
+	spacePicker,
 	startDisk,
 	trackTile
 } from './prefabs';
+import { cardLabel } from './cards';
 import { loadPieceGeometry, makePiece } from './assets';
 
 const BOARD_SCALE = 2.0; // maps [-1, 1] to world [-2, 2]
 const PAWNS_PER_PLAYER = 4;
-const PAWN_STACK_RADIUS = 0.055;
+const PAWN_STACK_RADIUS = 0.09;
 const PAWN_Y = 0.02;
+// Larger picker radii for stacking spaces so clicking anywhere on the
+// visible disk registers — not just the small central picker. Matches
+// `startDisk` / `homePocket` radii in prefabs.ts.
+const PICKER_RADIUS_START = 0.17;
+const PICKER_RADIUS_HOME = 0.16;
 
 export type CameraView = 'edge' | 'corner' | 'top';
 
@@ -33,6 +46,7 @@ const INITIAL_CAMERA: [number, number, number] = [0, 4.5, 3.0];
 const DEFAULT_TILT = 0.19 * Math.PI; // polar when coming from top-down
 const MIN_VISIBLE_TILT = 0.05 * Math.PI; // below this we treat the view as top-down
 const TOP_DOWN_POLAR = 0.001; // tiny offset so the up-vector isn't anti-parallel
+const CAMERA_TWEEN_MS = 500;
 
 function snapToNearest(value: number, step: number, offset: number): number {
 	return Math.round((value - offset) / step) * step + offset;
@@ -50,6 +64,23 @@ export class BoardRenderer {
 	private readonly controls: OrbitControls;
 	private readonly boardStaticGroup = new THREE.Group();
 	private readonly piecesGroup = new THREE.Group();
+	private readonly pickerGroup = new THREE.Group();
+	private readonly highlightsGroup = new THREE.Group();
+	private readonly deckDiscardGroup = new THREE.Group();
+	// Visible Start disks / Home pockets, tagged with `{ spaceId }` so the
+	// pointer raycaster treats the whole platform as a pickable space.
+	private readonly platformMeshes = new Map<SpaceId, THREE.Mesh>();
+	private readonly pickerDisks = new Map<SpaceId, THREE.Mesh>();
+	private interaction: Interaction | null = null;
+	private pickHandler: ((hit: PickHit | null) => void) | null = null;
+	private hoverHandler: ((hit: PickHit | null) => void) | null = null;
+	// Monotonic generation counter that invalidates an in-flight camera
+	// tween. Bumped on every new `setCameraView` and on user orbit input
+	// (`OrbitControls` `start`), so the old tween's per-frame onTick
+	// becomes a no-op the moment the user takes over or a new preset
+	// is requested.
+	private cameraTweenGen = 0;
+	private reducedMotion = false;
 	private readonly geometry: BoardGeometry;
 	private skin: BoardSkin;
 	private rafId: number | null = null;
@@ -88,6 +119,9 @@ export class BoardRenderer {
 
 		this.controls = new OrbitControls(this.camera, canvas);
 		this.controls.addEventListener('start', () => {
+			// Any user grab on OrbitControls cancels an in-flight camera
+			// tween — the user has taken over.
+			this.cameraTweenGen++;
 			this.userOrbitCallback?.();
 		});
 		this.controls.enablePan = false;
@@ -119,7 +153,29 @@ export class BoardRenderer {
 
 		this.scene.add(this.boardStaticGroup);
 		this.scene.add(this.piecesGroup);
+		this.scene.add(this.pickerGroup);
+		this.scene.add(this.highlightsGroup);
+		this.scene.add(this.deckDiscardGroup);
 		this.buildStatic();
+		this.buildPickers();
+
+		this.interaction = new Interaction(
+			canvas,
+			this.camera,
+			() => ({
+				pawns: this.collectVisiblePawns(),
+				// Ray-cast against the visible Start/Home platforms and the
+				// invisible track/safety pickers. Having both lets clicks
+				// anywhere on a big stacking disk register as that space.
+				spaces: [
+					...this.platformMeshes.values(),
+					...this.pickerDisks.values()
+				]
+			}),
+			(hit) => this.pickHandler?.(hit)
+		);
+		this.interaction.setHoverCallback((hit) => this.hoverHandler?.(hit));
+		this.interaction.attach();
 
 		this.resizeObserver = new ResizeObserver(() => this.onResize());
 		this.resizeObserver.observe(canvas);
@@ -158,9 +214,11 @@ export class BoardRenderer {
 		this.disposeGroup(this.boardStaticGroup);
 		this.buildStatic();
 		this.retintPawns();
+		if (this.previousState) this.rebuildDeckDiscard(this.previousState);
 	}
 
 	setReducedMotion(v: boolean): void {
+		this.reducedMotion = v;
 		this.animator.setReducedMotion(v);
 	}
 
@@ -168,37 +226,67 @@ export class BoardRenderer {
 	 * Snap the camera to the preset VIEW TYPE nearest its current position,
 	 * preserving radius and (when possible) polar. "Edge" snaps azimuth to
 	 * the closest multiple of π/2; "corner" to the closest π/4 + k·π/2;
-	 * "top" only changes polar.
+	 * "top" only changes polar. If `requestedAzimuth` is provided, it
+	 * overrides the nearest-snap (used to rotate to a specific seat).
 	 */
-	setCameraView(mode: CameraView): void {
-		const azimuth = this.controls.getAzimuthalAngle();
-		const polar = this.controls.getPolarAngle();
+	setCameraView(mode: CameraView, requestedAzimuth?: number): void {
+		const startAzimuth = this.controls.getAzimuthalAngle();
+		const startPolar = this.controls.getPolarAngle();
 		const radius = this.camera.position.distanceTo(this.controls.target);
 
-		let targetAzimuth = azimuth;
-		let targetPolar = polar;
+		let endAzimuth = startAzimuth;
+		let endPolar = startPolar;
 
 		switch (mode) {
 			case 'edge':
-				targetAzimuth = snapToNearest(azimuth, Math.PI / 2, 0);
-				if (polar < MIN_VISIBLE_TILT) targetPolar = DEFAULT_TILT;
+				endAzimuth = requestedAzimuth ?? snapToNearest(startAzimuth, Math.PI / 2, 0);
+				if (startPolar < MIN_VISIBLE_TILT) endPolar = DEFAULT_TILT;
 				break;
 			case 'corner':
-				targetAzimuth = snapToNearest(azimuth, Math.PI / 2, Math.PI / 4);
-				if (polar < MIN_VISIBLE_TILT) targetPolar = DEFAULT_TILT;
+				endAzimuth =
+					requestedAzimuth ??
+					snapToNearest(startAzimuth, Math.PI / 2, Math.PI / 4);
+				if (startPolar < MIN_VISIBLE_TILT) endPolar = DEFAULT_TILT;
 				break;
 			case 'top':
-				targetPolar = TOP_DOWN_POLAR;
+				endPolar = TOP_DOWN_POLAR;
 				break;
 		}
 
+		// Take the shortest angular path around the circle so a π↔−π swap
+		// goes the near way rather than sweeping 360°.
+		let delta = endAzimuth - startAzimuth;
+		while (delta > Math.PI) delta -= 2 * Math.PI;
+		while (delta < -Math.PI) delta += 2 * Math.PI;
+		const wrappedEndAzimuth = startAzimuth + delta;
+
+		if (this.reducedMotion || Math.abs(delta) < 1e-4 && Math.abs(endPolar - startPolar) < 1e-4) {
+			this.applyCameraSpherical(wrappedEndAzimuth, endPolar, radius);
+			return;
+		}
+
+		this.cameraTweenGen++;
+		const myGen = this.cameraTweenGen;
+		void tween(
+			CAMERA_TWEEN_MS,
+			(t) => {
+				if (this.cameraTweenGen !== myGen) return;
+				const a = startAzimuth + (wrappedEndAzimuth - startAzimuth) * t;
+				const p = startPolar + (endPolar - startPolar) * t;
+				this.applyCameraSpherical(a, p, radius);
+			},
+			easeInOutCubic
+		);
+	}
+
+	private applyCameraSpherical(azimuth: number, polar: number, radius: number): void {
 		const target = this.controls.target;
-		const sinP = Math.sin(targetPolar);
-		const cosP = Math.cos(targetPolar);
+		const sinP = Math.sin(polar);
+		const cosP = Math.cos(polar);
 		this.camera.position.set(
-			target.x + radius * sinP * Math.sin(targetAzimuth),
+			target.x + radius * sinP * Math.sin(azimuth),
 			target.y + radius * cosP,
-			target.z + radius * sinP * Math.cos(targetAzimuth)
+			target.z + radius * sinP * Math.cos(azimuth)
 		);
 		this.controls.update();
 	}
@@ -228,6 +316,7 @@ export class BoardRenderer {
 			return;
 		}
 		this.ensurePawns(state.num_players);
+		this.rebuildDeckDiscard(state);
 		const prev = this.previousState;
 		if (record && prev && player != null) {
 			this.animator.enqueue(prev.pawn_positions, record, player, {
@@ -253,16 +342,85 @@ export class BoardRenderer {
 		this.stopLoop();
 		this.resizeObserver.disconnect();
 		document.removeEventListener('visibilitychange', this.visibilityHandler);
+		this.interaction?.detach();
+		this.interaction = null;
 		this.controls.dispose();
 		this.disposeGroup(this.boardStaticGroup);
 		this.disposeGroup(this.piecesGroup);
+		this.disposeGroup(this.highlightsGroup);
+		this.disposeGroup(this.pickerGroup);
+		this.disposeGroup(this.deckDiscardGroup);
+		this.pickerDisks.clear();
+		this.platformMeshes.clear();
 		this.pawnMeshes = [];
 		this.renderer.dispose();
+	}
+
+	setPickHandler(handler: ((hit: PickHit | null) => void) | null): void {
+		this.pickHandler = handler;
+	}
+
+	setHoverHandler(handler: ((hit: PickHit | null) => void) | null): void {
+		this.hoverHandler = handler;
+	}
+
+	/**
+	 * Replace the highlight overlay with rings over `destinations`, an
+	 * optional halo under `selectedPawn` (the pawn you're currently
+	 * picking a target for), and an optional halo + ring for a locked-in
+	 * Split-7 first leg. Pass `{ destinations: [] }` to clear.
+	 */
+	setHighlights(opts: {
+		destinations: SpaceId[];
+		activeDestination?: SpaceId | null;
+		selectedPawn?: { player: number; pawn: number } | null;
+		lockedPawn?: { player: number; pawn: number } | null;
+		lockedDestination?: SpaceId | null;
+		currentPlayer?: number;
+	}): void {
+		this.disposeGroup(this.highlightsGroup);
+		const colorForPlayer = (p: number) =>
+			new THREE.Color(this.skin.palette.players[p] ?? '#888888');
+		const destColor = colorForPlayer(
+			opts.currentPlayer ?? opts.selectedPawn?.player ?? opts.lockedPawn?.player ?? 0
+		);
+		const addDecalAt = (id: SpaceId, mesh: THREE.Mesh) => {
+			const layout = this.geometry.spaces.find((s) => s.id === id);
+			if (!layout) return;
+			const [x, z] = toPlanar(layout.center, BOARD_SCALE);
+			mesh.position.x = x;
+			mesh.position.z = z;
+			this.highlightsGroup.add(mesh);
+		};
+		// Locked destination (Split-7 first leg) uses a dimmer distinct ring.
+		if (opts.lockedDestination != null) {
+			addDecalAt(opts.lockedDestination, lockedDestinationRing(destColor));
+		}
+		// Regular legal destinations — skip the active one; rendered separately.
+		for (const id of opts.destinations) {
+			if (id === opts.activeDestination) continue;
+			if (id === opts.lockedDestination) continue;
+			addDecalAt(id, destinationRing(destColor));
+		}
+		// Active (keyboard-focused) destination — brighter, filled disk.
+		if (opts.activeDestination != null) {
+			addDecalAt(opts.activeDestination, activeDestinationDisk(destColor));
+		}
+		const addHalo = (pawn: { player: number; pawn: number }) => {
+			const mesh = this.pawnMeshes[pawn.player]?.[pawn.pawn];
+			if (!mesh) return;
+			const halo = selectionHalo(colorForPlayer(pawn.player));
+			halo.position.set(mesh.position.x, halo.position.y, mesh.position.z);
+			this.highlightsGroup.add(halo);
+		};
+		if (opts.lockedPawn) addHalo(opts.lockedPawn);
+		if (opts.selectedPawn) addHalo(opts.selectedPawn);
 	}
 
 	// ─── Internal ──────────────────────────────────────────────────
 
 	private buildStatic(): void {
+		this.platformMeshes.clear();
 		this.boardStaticGroup.add(boardBase(this.skin));
 
 		for (const layout of this.geometry.spaces) {
@@ -272,6 +430,12 @@ export class BoardRenderer {
 			mesh.position.x = x;
 			mesh.position.z = z;
 			mesh.rotation.y = -(layout.tangent_deg * Math.PI) / 180;
+			// Tag the visible tile/disk so the pointer raycaster can
+			// resolve a click to its SpaceId directly — especially useful
+			// for the larger Start and Home platforms where the click
+			// area extends well past the invisible picker disk.
+			mesh.userData = { spaceId: layout.id };
+			this.platformMeshes.set(layout.id, mesh);
 			this.boardStaticGroup.add(mesh);
 		}
 
@@ -283,19 +447,30 @@ export class BoardRenderer {
 			const [ex, ez] = toPlanar(end.center, BOARD_SCALE);
 			this.boardStaticGroup.add(slideRamp(this.skin, slide.owner, [sx, sz], [ex, ez]));
 		}
+	}
 
-		// Deck + discard placeholders at the board center. The engine doesn't
-		// currently publish their positions, so they're hard-coded here —
-		// revisit once the HUD / hand rendering session wants to coordinate.
-		const deck = deckStack(this.skin);
-		deck.position.x = -0.18;
-		deck.position.z = 0;
-		this.boardStaticGroup.add(deck);
-
-		const discard = discardStack(this.skin);
-		discard.position.x = 0.18;
-		discard.position.z = 0;
-		this.boardStaticGroup.add(discard);
+	/**
+	 * Rebuild the deck + discard meshes at the center of the board. The
+	 * deck's height scales with `deck_remaining`; the discard's height
+	 * scales with `discard.length`, and its top face shows the most
+	 * recently-played card so viewers can see what's in play.
+	 */
+	private rebuildDeckDiscard(state: GameStateView): void {
+		this.disposeGroup(this.deckDiscardGroup);
+		if (state.deck_remaining > 0) {
+			const deck = deckStack(this.skin, state.deck_remaining);
+			deck.position.x = -0.18;
+			deck.position.z = 0;
+			this.deckDiscardGroup.add(deck);
+		}
+		if (state.discard.length > 0) {
+			const topRaw = state.discard[state.discard.length - 1] ?? null;
+			const label = cardLabel(topRaw);
+			const discard = discardStack(this.skin, state.discard.length, label ?? null);
+			discard.position.x = 0.18;
+			discard.position.z = 0;
+			this.deckDiscardGroup.add(discard);
+		}
 	}
 
 	private meshForSpace(
@@ -308,6 +483,35 @@ export class BoardRenderer {
 		return null;
 	}
 
+	private buildPickers(): void {
+		this.pickerDisks.clear();
+		for (const layout of this.geometry.spaces) {
+			// StartArea and Home are stacking spaces whose visible disks
+			// are larger than a regular track tile — give them a bigger
+			// invisible picker so any click on the disk counts.
+			let radius: number | undefined;
+			if ('StartArea' in layout.kind) radius = PICKER_RADIUS_START;
+			else if ('Home' in layout.kind) radius = PICKER_RADIUS_HOME;
+			const picker = spacePicker(radius);
+			picker.userData = { spaceId: layout.id };
+			const [x, z] = toPlanar(layout.center, BOARD_SCALE);
+			picker.position.x = x;
+			picker.position.z = z;
+			this.pickerGroup.add(picker);
+			this.pickerDisks.set(layout.id, picker);
+		}
+	}
+
+	private collectVisiblePawns(): THREE.Object3D[] {
+		const out: THREE.Object3D[] = [];
+		for (const row of this.pawnMeshes) {
+			for (const mesh of row) {
+				if (mesh.visible) out.push(mesh);
+			}
+		}
+		return out;
+	}
+
 	private ensurePawns(numPlayers: number): void {
 		if (!this.pawnGeometry) return;
 		while (this.pawnMeshes.length < numPlayers) {
@@ -316,6 +520,7 @@ export class BoardRenderer {
 			const row: THREE.Mesh[] = [];
 			for (let k = 0; k < PAWNS_PER_PLAYER; k++) {
 				const mesh = makePiece(this.pawnGeometry, color);
+				mesh.userData = { player: p, pawn: k };
 				this.piecesGroup.add(mesh);
 				row.push(mesh);
 			}
