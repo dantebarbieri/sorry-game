@@ -57,8 +57,8 @@
 		seats = seats.map((s, idx) => (idx === i ? kind : s));
 	}
 
-	function tryClose() {
-		if (!required) onClose();
+	function onKeydown(e: KeyboardEvent) {
+		if (e.key === 'Escape' && !required) onClose();
 	}
 
 	const activeCount = $derived(seats.filter((s) => s.type !== 'Empty').length);
@@ -73,12 +73,12 @@
 
 {#if open}
 	<div
-		class="scrim"
-		role="presentation"
-		onclick={tryClose}
-		onkeydown={(e) => e.key === 'Escape' && tryClose()}
-	></div>
-	<div class="drawer" role="dialog" aria-modal="true" aria-label="New game setup">
+		class="drawer"
+		role="dialog"
+		aria-label="New game setup"
+		tabindex="-1"
+		onkeydown={onKeydown}
+	>
 		<header>
 			<h2>{required ? 'Configure game' : 'New game'}</h2>
 			{#if !required}
@@ -158,15 +158,11 @@
 {/if}
 
 <style>
-	.scrim {
-		position: fixed;
-		inset: 0;
-		background: rgba(0, 0, 0, 0.45);
-		z-index: 100;
-	}
 	.drawer {
 		position: fixed;
-		top: 0;
+		/* Sits below the sticky top nav (z-index 50) so nav links stay
+		 * clickable; the drawer is a side panel, not a blocking modal. */
+		top: 3rem;
 		right: 0;
 		bottom: 0;
 		width: min(28rem, 96vw);
@@ -174,12 +170,13 @@
 		color: #e8ecf2;
 		padding: 1rem 1.25rem;
 		overflow-y: auto;
-		z-index: 101;
+		z-index: 40;
 		display: flex;
 		flex-direction: column;
 		gap: 1rem;
 		border-left: 1px solid rgba(255, 255, 255, 0.08);
 		box-shadow: -12px 0 32px rgba(0, 0, 0, 0.4);
+		outline: none;
 	}
 	:global(.app[data-skin='light']) .drawer {
 		background: #faf4e0;

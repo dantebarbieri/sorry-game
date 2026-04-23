@@ -1,10 +1,10 @@
 <script lang="ts">
-	import { onMount, type Snippet } from 'svelte';
+	import type { Snippet } from 'svelte';
 	import { page } from '$app/stores';
 	import {
 		createThemeStore,
-		loadStoredSkin,
 		provideTheme,
+		type ThemeMode,
 		type ThemeStore
 	} from '$lib/theme-context.svelte';
 
@@ -16,15 +16,17 @@
 
 	const theme: ThemeStore = provideTheme(createThemeStore());
 
-	onMount(() => {
-		theme.skin = loadStoredSkin();
-	});
-
 	const navLinks = [
 		{ href: '/', label: 'Home' },
 		{ href: '/rules', label: 'Rules' },
 		{ href: '/play', label: 'Play' },
 		{ href: '/simulate', label: 'Simulate' }
+	];
+
+	const themeOptions: { mode: ThemeMode; label: string }[] = [
+		{ mode: 'light', label: 'Light' },
+		{ mode: 'dark', label: 'Dark' },
+		{ mode: 'auto', label: 'Auto' }
 	];
 
 	function isActive(href: string, pathname: string): boolean {
@@ -51,15 +53,19 @@
 				</a>
 			{/each}
 		</nav>
-		<button
-			type="button"
-			class="skin-toggle"
-			onclick={() => theme.toggle()}
-			aria-label={theme.skin.id === 'light' ? 'Switch to dark skin' : 'Switch to light skin'}
-			title={theme.skin.id === 'light' ? 'Switch to dark skin' : 'Switch to light skin'}
-		>
-			{theme.skin.id === 'light' ? 'Dark' : 'Light'}
-		</button>
+		<div class="skin-segmented" role="group" aria-label="Theme">
+			{#each themeOptions as opt (opt.mode)}
+				<button
+					type="button"
+					class="skin-option"
+					aria-pressed={theme.mode === opt.mode}
+					onclick={() => theme.setMode(opt.mode)}
+					title={opt.mode === 'auto' ? 'Follow system preference' : `Use ${opt.label.toLowerCase()} skin`}
+				>
+					{opt.label}
+				</button>
+			{/each}
+		</div>
 	</header>
 
 	<main>
@@ -152,19 +158,40 @@
 		background: rgba(246, 196, 84, 0.18);
 	}
 
-	.skin-toggle {
-		background: transparent;
+	.skin-segmented {
+		display: inline-flex;
 		border: 1px solid currentColor;
-		color: inherit;
-		padding: 0.3rem 0.7rem;
 		border-radius: 6px;
-		font-size: 0.85rem;
-		cursor: pointer;
+		overflow: hidden;
 		opacity: 0.75;
 	}
 
-	.skin-toggle:hover {
-		opacity: 1;
+	.skin-option {
+		background: transparent;
+		color: inherit;
+		border: 0;
+		padding: 0.3rem 0.6rem;
+		font: inherit;
+		font-size: 0.85rem;
+		cursor: pointer;
+		border-right: 1px solid currentColor;
+	}
+
+	.skin-option:last-child {
+		border-right: 0;
+	}
+
+	.skin-option:hover {
+		background: rgba(255, 255, 255, 0.08);
+	}
+
+	.app[data-skin='light'] .skin-option:hover {
+		background: rgba(0, 0, 0, 0.06);
+	}
+
+	.skin-option[aria-pressed='true'] {
+		background: rgba(246, 196, 84, 0.22);
+		font-weight: 600;
 	}
 
 	main {

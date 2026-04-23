@@ -80,7 +80,12 @@
 			<tr>
 				<td colspan={2 + rankCount}>
 					<span class="ftr-label">Truncated</span>
-					<span class="ftr-val">{stats.truncated_count}</span>
+					<span class="ftr-val">
+						{stats.games_played > 0
+							? ((stats.truncated_count / stats.games_played) * 100).toFixed(1)
+							: '0.0'}%
+						<span class="raw">({stats.truncated_count})</span>
+					</span>
 				</td>
 			</tr>
 		</tfoot>

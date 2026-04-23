@@ -1,5 +1,7 @@
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import CardDemo from '$lib/components/rules/CardDemo.svelte';
+	import { loadWasm, parseJsonOrThrow } from '$lib/wasm';
 	import {
 		DEMO_SETUP,
 		DEMO_ONE,
@@ -8,6 +10,34 @@
 		DEMO_ELEVEN_SWAP,
 		DEMO_SORRY
 	} from '$lib/rules/demo-specs';
+
+	interface StrategyDescription {
+		name: string;
+		description: string;
+		complexity: string;
+	}
+
+	// Ascending by difficulty; unknown labels sort to the end so new
+	// complexity tiers don't silently move to the front.
+	const COMPLEXITY_ORDER = ['Trivial', 'Low', 'Medium', 'High'];
+	function complexityRank(c: string): number {
+		const i = COMPLEXITY_ORDER.indexOf(c);
+		return i < 0 ? COMPLEXITY_ORDER.length : i;
+	}
+
+	let strategies = $state<StrategyDescription[]>([]);
+
+	onMount(async () => {
+		try {
+			const wasm = await loadWasm();
+			const descs = parseJsonOrThrow<StrategyDescription[]>(wasm.get_strategy_descriptions());
+			strategies = descs
+				.slice()
+				.sort((a, b) => complexityRank(a.complexity) - complexityRank(b.complexity));
+		} catch (e) {
+			console.warn('[rules] failed to load strategy metadata', e);
+		}
+	});
 
 	const sections = [
 		{ id: 'overview', label: 'Overview' },
@@ -135,38 +165,21 @@
 			<h2>Strategies</h2>
 			<p>
 				The simulator page lets you run thousands of games against different computer
-				strategies. Here are the ones planned for this project:
+				strategies. They're listed here in ascending difficulty.
 			</p>
-			<ul class="strategy-list">
-				<li>
-					<strong>Random</strong> <span class="tag">shipped</span> — picks a legal move uniformly
-					at random. Useful as a baseline.
-				</li>
-				<li>
-					<strong>Greedy</strong> <span class="tag">planned</span> — always tries to minimize
-					the distance of its pawns to Home.
-				</li>
-				<li>
-					<strong>Not Sorry</strong> <span class="tag">planned</span> — prioritizes getting
-					pawns out of Start; falls back to greedy.
-				</li>
-				<li>
-					<strong>Survivor</strong> <span class="tag">planned</span> — attacks the current
-					leader at any cost, even sacrificing its own position.
-				</li>
-				<li>
-					<strong>Reverse</strong> <span class="tag">planned</span> — hangs a pawn just past its
-					start exit, hoping to cascade home on a single 4 or a chain of 10s.
-				</li>
-				<li>
-					<strong>Teleporter</strong> <span class="tag">planned</span> — always takes an 11
-					swap when legal, picking the target that advances it furthest.
-				</li>
-				<li>
-					<strong>Sidekick</strong> <span class="tag">planned</span> — piles on whichever
-					opponent most recently lost a pawn.
-				</li>
-			</ul>
+			{#if strategies.length > 0}
+				<ul class="strategy-list">
+					{#each strategies as s (s.name)}
+						<li>
+							<strong>{s.name}</strong>
+							<span class="tag tag-{s.complexity.toLowerCase()}">{s.complexity}</span>
+							— {s.description}
+						</li>
+					{/each}
+				</ul>
+			{:else}
+				<p class="hint">Loading strategies…</p>
+			{/if}
 		</section>
 	</main>
 </div>
@@ -286,5 +299,17 @@
 		border-radius: 3px;
 		background: rgba(246, 196, 84, 0.25);
 		margin: 0 0.35rem;
+	}
+	.tag-trivial {
+		background: rgba(110, 231, 162, 0.25);
+	}
+	.tag-low {
+		background: rgba(95, 168, 255, 0.25);
+	}
+	.tag-medium {
+		background: rgba(246, 196, 84, 0.3);
+	}
+	.tag-high {
+		background: rgba(241, 97, 97, 0.3);
 	}
 </style>

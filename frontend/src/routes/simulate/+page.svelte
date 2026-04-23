@@ -169,6 +169,7 @@
 			selected={replayIndex}
 			onSelect={(i) => (replayIndex = i)}
 			canReplay={client.histories !== null}
+			numPlayers={strategies.length}
 		/>
 	</section>
 </div>

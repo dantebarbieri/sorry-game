@@ -8,9 +8,13 @@
 		selected: number | null;
 		onSelect: (index: number) => void;
 		canReplay: boolean;
+		/** Number of seats in the sim — used to pad the completion-order
+		 *  column with em-dashes for players who didn't finish before a
+		 *  truncation. Defaults to 4 (standard Sorry!). */
+		numPlayers?: number;
 	}
 
-	const { games, selected, onSelect, canReplay }: Props = $props();
+	const { games, selected, onSelect, canReplay, numPlayers = 4 }: Props = $props();
 	const theme = useTheme();
 </script>
 
@@ -21,6 +25,9 @@
 	</header>
 	<ul>
 		{#each games as g (g.index)}
+			{@const placeholders = g.truncated
+				? Math.max(0, numPlayers - g.winners.length)
+				: 0}
 			<li>
 				<button
 					type="button"
@@ -30,16 +37,23 @@
 					title={canReplay ? 'Replay this game' : 'Enable "keep histories" to replay'}
 				>
 					<span class="idx">#{g.index + 1}</span>
-					<span class="winner">
-						{#if g.winners.length > 0}
-							<span
-								class="dot"
-								style:background={theme.skin.palette.players[g.winners[0]]}
-								aria-hidden="true"
-							></span>
-							{PLAYER_NAMES[g.winners[0]] ?? `P${g.winners[0]}`}
-						{:else}
+					<span class="placements">
+						{#if g.winners.length === 0 && !g.truncated}
 							—
+						{:else}
+							{#each g.winners as winner, rank (rank)}
+								<span class="place" title="{rank + 1}{['st', 'nd', 'rd'][rank] ?? 'th'} place">
+									<span
+										class="dot"
+										style:background={theme.skin.palette.players[winner]}
+										aria-hidden="true"
+									></span>
+									{PLAYER_NAMES[winner] ?? `P${winner}`}
+								</span>
+							{/each}
+							{#each Array(placeholders) as _, i (i)}
+								<span class="place dash" title="Truncated before finishing">—</span>
+							{/each}
 						{/if}
 					</span>
 					<span class="turns">{g.num_turns}t</span>
@@ -101,6 +115,7 @@
 		cursor: pointer;
 		font: inherit;
 		font-size: 0.85rem;
+		min-width: 0;
 	}
 	button:hover:not(:disabled) {
 		background: rgba(255, 255, 255, 0.06);
@@ -120,10 +135,21 @@
 		opacity: 0.55;
 		font-variant-numeric: tabular-nums;
 	}
-	.winner {
+	.placements {
 		display: flex;
 		align-items: center;
 		gap: 0.35rem;
+		flex-wrap: wrap;
+		min-width: 0;
+	}
+	.place {
+		display: inline-flex;
+		align-items: center;
+		gap: 0.25rem;
+		white-space: nowrap;
+	}
+	.place.dash {
+		opacity: 0.5;
 	}
 	.dot {
 		width: 10px;

@@ -92,6 +92,10 @@ export class BoardRenderer {
 	private pendingState: GameStateView | null = null;
 	private pendingStep: { record: PlayRecord; player: number } | null = null;
 	private previousState: GameStateView | null = null;
+	// The player whose card currently sits on top of the discard. Persisted
+	// across `setState` calls so a skin change or no-step refresh still
+	// colors the face correctly; reset to null on initial load / New Game.
+	private lastDiscardActor: number | null = null;
 	private pieceLoadError: Error | null = null;
 	private userOrbitCallback: (() => void) | null = null;
 	private animator: Animator;
@@ -214,7 +218,7 @@ export class BoardRenderer {
 		this.disposeGroup(this.boardStaticGroup);
 		this.buildStatic();
 		this.retintPawns();
-		if (this.previousState) this.rebuildDeckDiscard(this.previousState);
+		if (this.previousState) this.rebuildDeckDiscard(this.previousState, this.lastDiscardActor);
 	}
 
 	setReducedMotion(v: boolean): void {
@@ -356,7 +360,14 @@ export class BoardRenderer {
 			return;
 		}
 		this.ensurePawns(state);
-		this.rebuildDeckDiscard(state);
+		// A step implies a fresh actor for the discard top card; a stateless
+		// refresh (New Game, reset) clears it so the face reverts to neutral.
+		if (player != null) {
+			this.lastDiscardActor = player;
+		} else if (!record) {
+			this.lastDiscardActor = null;
+		}
+		this.rebuildDeckDiscard(state, this.lastDiscardActor);
 		const prev = this.previousState;
 		if (record && prev && player != null) {
 			this.animator.enqueue(prev.pawn_positions, record, player, {
@@ -508,9 +519,9 @@ export class BoardRenderer {
 	 * Rebuild the deck + discard meshes at the center of the board. The
 	 * deck's height scales with `deck_remaining`; the discard's height
 	 * scales with `discard.length`, and its top face shows the most
-	 * recently-played card so viewers can see what's in play.
+	 * recently-played card colored by the actor who just played it.
 	 */
-	private rebuildDeckDiscard(state: GameStateView): void {
+	private rebuildDeckDiscard(state: GameStateView, actor: number | null): void {
 		this.disposeGroup(this.deckDiscardGroup);
 		if (state.deck_remaining > 0) {
 			const deck = deckStack(this.skin, state.deck_remaining);
@@ -521,7 +532,14 @@ export class BoardRenderer {
 		if (state.discard.length > 0) {
 			const topRaw = state.discard[state.discard.length - 1] ?? null;
 			const label = cardLabel(topRaw);
-			const discard = discardStack(this.skin, state.discard.length, label ?? null);
+			const actorColor =
+				actor != null ? this.skin.palette.players[this.sideFor(state, actor)] : undefined;
+			const discard = discardStack(
+				this.skin,
+				state.discard.length,
+				label ?? null,
+				actorColor
+			);
 			discard.position.x = 0.18;
 			discard.position.z = 0;
 			this.deckDiscardGroup.add(discard);

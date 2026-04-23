@@ -300,7 +300,11 @@ export const DEMO_SORRY: DemoSpec = {
 	id: 'card-sorry',
 	title: 'The Sorry! card',
 	body: 'A Sorry! card teleports a pawn from your Start area onto the exact space of any opponent pawn on the main track, sending that pawn back to their Start. A satisfying equalizer.',
+	// Pull the camera further back than the default corner view so Blue's
+	// start (where the bumped pawn lands) stays in frame throughout the
+	// animation.
 	cameraView: 'corner',
+	cameraRadius: 5.2,
 	numPlayers: 4,
 	initialPlacements: [{ player: 1, pawn: 0, at: { kind: 'track', index: 28 } }],
 	startingPlayer: 0,
