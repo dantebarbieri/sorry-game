@@ -9,6 +9,7 @@ interface WasmApi {
 	get_available_rules: () => string;
 	get_available_strategies: () => string;
 	get_rules_info: (rules_name: string) => string;
+	simulate_one_with_history: (config_json: string) => string;
 	create_interactive_game: (config_json: string) => string;
 	get_game_state: (game_id: number, viewer: number) => string;
 	apply_action: (game_id: number, action_json: string) => string;
