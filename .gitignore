@@ -1,3 +1,9 @@
+# ─── Local-only reference material ─────────────────────────────────────
+# Board photos are third-party product images and don't belong in the
+# public repo. The CC-BY piece GLB lives under frontend/static/models/
+# with its attribution; the inspo/ originals stay local.
+inspo/
+
 # ─── Rust ──────────────────────────────────────────────────────────────
 target/
 **/*.rs.bk
