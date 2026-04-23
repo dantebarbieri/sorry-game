@@ -142,14 +142,9 @@
 		autoPlay = !autoPlay;
 	}
 
-	function newGame() {
-		seed = Math.floor(Math.random() * 1_000_000_000);
-		void loadReplay();
-	}
-
-	function setRuleset(r: Ruleset) {
-		if (r === ruleset) return;
+	function newGame(r: Ruleset) {
 		ruleset = r;
+		seed = Math.floor(Math.random() * 1_000_000_000);
 		void loadReplay();
 	}
 
@@ -235,18 +230,15 @@
 					Dark
 				</button>
 			</div>
-			<div class="group" aria-label="Ruleset">
-				<button
-					onclick={() => setRuleset('Standard')}
-					class:active={ruleset === 'Standard'}
-				>
-					Standard
+			<div class="group" aria-label="New game">
+				<button onclick={() => newGame('Standard')} title="Generate a new Standard-rules game">
+					New Standard
 				</button>
 				<button
-					onclick={() => setRuleset('PlayOut')}
-					class:active={ruleset === 'PlayOut'}
+					onclick={() => newGame('PlayOut')}
+					title="Generate a new Play-Out game (continues after first finisher to establish 1st→4th)"
 				>
-					Play Out
+					New Play Out
 				</button>
 			</div>
 			<div class="group" aria-label="Camera view">
@@ -287,7 +279,6 @@
 				>
 					⏭
 				</button>
-				<button onclick={newGame}>New game</button>
 			</div>
 		</div>
 	</header>
@@ -344,8 +335,8 @@
 		/>
 		{#if history}
 			<small>
-				Seed {history.seed} · {history.num_players} players · {history.turns.length} turns ·
-				{cursorLength} plays
+				{history.rules_name} · seed {history.seed} · {history.num_players} players ·
+				{history.turns.length} turns · {cursorLength} plays
 			</small>
 		{/if}
 	</footer>
