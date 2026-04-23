@@ -24,10 +24,14 @@ export interface GameSummary {
 export interface ProgressStats {
 	games_played: number;
 	total_games: number;
-	/** Per-player win counts. Index = player id. */
-	wins: number[];
-	/** Per-player win rate (wins / games_played). Safe-divides to 0. */
-	win_rate: number[];
+	/**
+	 * Per-player placement counts. `placements[p][rank]` = number of
+	 * games in which player p finished at `rank` (0 = 1st, 1 = 2nd, …).
+	 * Standard Sorry! only fills `rank == 0`; PlayOut fills all four.
+	 */
+	placements: number[][];
+	/** `placement_rate[p][rank] = placements[p][rank] / games_played`. */
+	placement_rate: number[][];
 	avg_turns: number;
 	min_turns: number;
 	max_turns: number;

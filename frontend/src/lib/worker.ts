@@ -76,7 +76,12 @@ async function runBatch(config: SimConfig) {
 	try {
 		const wasm = await loadWorkerWasm();
 		const numPlayers = config.strategies.length;
-		const wins = new Array<number>(numPlayers).fill(0);
+		// placements[p][rank] counts games where player p finished at rank.
+		// rank 0 = 1st place, 1 = 2nd, etc. Standard rules only populate
+		// rank 0; PlayOut fills up to rank numPlayers-1.
+		const placements: number[][] = Array.from({ length: numPlayers }, () =>
+			new Array<number>(numPlayers).fill(0)
+		);
 		let turnSum = 0;
 		let minTurns = Infinity;
 		let maxTurns = 0;
@@ -101,8 +106,9 @@ async function runBatch(config: SimConfig) {
 			);
 			const res = parseJsonOrThrow<SingleGameResult>(raw);
 
-			for (const w of res.stats.winners) {
-				if (w < numPlayers) wins[w]++;
+			for (let rank = 0; rank < res.stats.winners.length; rank++) {
+				const p = res.stats.winners[rank];
+				if (p < numPlayers && rank < numPlayers) placements[p][rank]++;
 			}
 			turnSum += res.stats.num_turns;
 			if (res.stats.num_turns < minTurns) minTurns = res.stats.num_turns;
@@ -125,7 +131,7 @@ async function runBatch(config: SimConfig) {
 					stats: buildProgressStats(
 						i + 1,
 						config.num_games,
-						wins,
+						placements,
 						turnSum,
 						minTurns,
 						maxTurns,
@@ -144,7 +150,7 @@ async function runBatch(config: SimConfig) {
 		const finalStats = buildProgressStats(
 			config.num_games,
 			config.num_games,
-			wins,
+			placements,
 			turnSum,
 			minTurns,
 			maxTurns,
@@ -167,7 +173,7 @@ async function runBatch(config: SimConfig) {
 function buildProgressStats(
 	played: number,
 	total: number,
-	wins: number[],
+	placements: number[][],
 	turnSum: number,
 	minTurns: number,
 	maxTurns: number,
@@ -177,8 +183,8 @@ function buildProgressStats(
 	return {
 		games_played: played,
 		total_games: total,
-		wins: wins.slice(),
-		win_rate: wins.map((w) => w / safePlayed),
+		placements: placements.map((row) => row.slice()),
+		placement_rate: placements.map((row) => row.map((c) => c / safePlayed)),
 		avg_turns: turnSum / safePlayed,
 		min_turns: minTurns === Infinity ? 0 : minTurns,
 		max_turns: maxTurns,
