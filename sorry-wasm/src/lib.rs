@@ -27,6 +27,7 @@ use sorry_core::{
 fn make_rules(name: &str) -> Result<Box<dyn Rules>, String> {
     match name {
         "Standard" | "" => Ok(Box::new(StandardRules::new())),
+        "PlayOut" => Ok(Box::new(StandardRules::new_play_out())),
         other => Err(format!("unknown rules variant: {other}")),
     }
 }
@@ -34,6 +35,7 @@ fn make_rules(name: &str) -> Result<Box<dyn Rules>, String> {
 fn make_rules_factory(name: &str) -> Result<Box<dyn Fn() -> Box<dyn Rules>>, String> {
     match name {
         "Standard" | "" => Ok(Box::new(|| Box::new(StandardRules::new()))),
+        "PlayOut" => Ok(Box::new(|| Box::new(StandardRules::new_play_out()))),
         other => Err(format!("unknown rules variant: {other}")),
     }
 }
@@ -52,7 +54,7 @@ fn make_strategy_factory(name: &str) -> Result<Box<dyn Fn() -> Box<dyn Strategy>
     }
 }
 
-const AVAILABLE_RULES: &[&str] = &["Standard"];
+const AVAILABLE_RULES: &[&str] = &["Standard", "PlayOut"];
 const AVAILABLE_STRATEGIES: &[&str] = &["Random"];
 
 // ─── DTOs ─────────────────────────────────────────────────────────────
