@@ -229,10 +229,32 @@ export class BoardRenderer {
 	 * "top" only changes polar. If `requestedAzimuth` is provided, it
 	 * overrides the nearest-snap (used to rotate to a specific seat).
 	 */
-	setCameraView(mode: CameraView, requestedAzimuth?: number): void {
+	setCameraView(
+		mode: CameraView,
+		requestedAzimuth?: number,
+		requestedRadius?: number,
+		requestedTarget?: [number, number, number]
+	): void {
 		const startAzimuth = this.controls.getAzimuthalAngle();
 		const startPolar = this.controls.getPolarAngle();
-		const radius = this.camera.position.distanceTo(this.controls.target);
+		const startRadius = this.camera.position.distanceTo(this.controls.target);
+		const endRadius = requestedRadius ?? startRadius;
+		// When no radius change is requested, keep the existing radius
+		// through the whole tween — preserves the behaviour callers have
+		// relied on. Otherwise interpolate to the requested radius.
+		const radius = endRadius;
+
+		const startTarget: [number, number, number] = [
+			this.controls.target.x,
+			this.controls.target.y,
+			this.controls.target.z
+		];
+		const endTarget: [number, number, number] = requestedTarget ?? [0, 0, 0];
+		const targetDelta: [number, number, number] = [
+			endTarget[0] - startTarget[0],
+			endTarget[1] - startTarget[1],
+			endTarget[2] - startTarget[2]
+		];
 
 		let endAzimuth = startAzimuth;
 		let endPolar = startPolar;
@@ -260,7 +282,19 @@ export class BoardRenderer {
 		while (delta < -Math.PI) delta += 2 * Math.PI;
 		const wrappedEndAzimuth = startAzimuth + delta;
 
-		if (this.reducedMotion || Math.abs(delta) < 1e-4 && Math.abs(endPolar - startPolar) < 1e-4) {
+		const radiusDelta = endRadius - startRadius;
+		const targetStill =
+			Math.abs(targetDelta[0]) < 1e-4 &&
+			Math.abs(targetDelta[1]) < 1e-4 &&
+			Math.abs(targetDelta[2]) < 1e-4;
+		if (
+			this.reducedMotion ||
+			(Math.abs(delta) < 1e-4 &&
+				Math.abs(endPolar - startPolar) < 1e-4 &&
+				Math.abs(radiusDelta) < 1e-4 &&
+				targetStill)
+		) {
+			this.controls.target.set(endTarget[0], endTarget[1], endTarget[2]);
 			this.applyCameraSpherical(wrappedEndAzimuth, endPolar, radius);
 			return;
 		}
@@ -273,7 +307,13 @@ export class BoardRenderer {
 				if (this.cameraTweenGen !== myGen) return;
 				const a = startAzimuth + (wrappedEndAzimuth - startAzimuth) * t;
 				const p = startPolar + (endPolar - startPolar) * t;
-				this.applyCameraSpherical(a, p, radius);
+				const r = startRadius + radiusDelta * t;
+				this.controls.target.set(
+					startTarget[0] + targetDelta[0] * t,
+					startTarget[1] + targetDelta[1] * t,
+					startTarget[2] + targetDelta[2] * t
+				);
+				this.applyCameraSpherical(a, p, r);
 			},
 			easeInOutCubic
 		);

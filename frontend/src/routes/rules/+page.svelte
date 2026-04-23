@@ -151,8 +151,8 @@
 					pawns out of Start; falls back to greedy.
 				</li>
 				<li>
-					<strong>Survivor</strong> <span class="tag">planned</span> — attacks whichever
-					opponent is closest to winning; strategically reverses them with a 4 or 10 when able.
+					<strong>Survivor</strong> <span class="tag">planned</span> — attacks the current
+					leader at any cost, even sacrificing its own position.
 				</li>
 				<li>
 					<strong>Reverse</strong> <span class="tag">planned</span> — hangs a pawn just past its
@@ -160,8 +160,7 @@
 				</li>
 				<li>
 					<strong>Teleporter</strong> <span class="tag">planned</span> — always takes an 11
-					swap when legal, and picks the target that maximizes its own distance around the
-					board.
+					swap when legal, picking the target that advances it furthest.
 				</li>
 				<li>
 					<strong>Sidekick</strong> <span class="tag">planned</span> — piles on whichever

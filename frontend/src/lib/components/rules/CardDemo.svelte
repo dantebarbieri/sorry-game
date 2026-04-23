@@ -40,7 +40,9 @@
 			cameraCommand = {
 				view: spec.cameraView ?? 'corner',
 				nonce: ++nonce,
-				targetAzimuth: spec.cameraAzimuth
+				targetAzimuth: spec.cameraAzimuth,
+				targetRadius: spec.cameraRadius,
+				targetPoint: spec.cameraTarget
 			};
 		} catch (e) {
 			error = e instanceof Error ? e.message : String(e);

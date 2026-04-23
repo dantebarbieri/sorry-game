@@ -56,6 +56,13 @@ export interface DemoSpec {
 	cameraView?: CameraView;
 	/** Azimuth override for `edge`/`corner`; measured in radians. */
 	cameraAzimuth?: number;
+	/** Radius (distance from board center) override. Default ≈ 5.4 world
+	 *  units; smaller values zoom in. Use for demos that only involve a
+	 *  local area of the board so viewers see pieces clearly. */
+	cameraRadius?: number;
+	/** Camera look-at point override. Default `[0, 0, 0]` (board center).
+	 *  Use to pan to a player's side, e.g. `[0, 0, -1.0]` for Red. */
+	cameraTarget?: [number, number, number];
 	/** How many players the scene models (always 4 for Sorry). */
 	numPlayers: number;
 	/** Initial pawn positions. Unspecified pawns default to their Start. */
@@ -225,6 +232,8 @@ export const DEMO_ONE: DemoSpec = {
 	body: 'A 1 lets you start a pawn out of Start onto your start-exit square, or move a pawn on the track one space forward.',
 	cameraView: 'edge',
 	cameraAzimuth: Math.PI,
+	cameraRadius: 2.6,
+	cameraTarget: [0, 0, -1.4],
 	numPlayers: 4,
 	initialPlacements: [],
 	startingPlayer: 0,
@@ -242,8 +251,12 @@ export const DEMO_FOUR: DemoSpec = {
 	id: 'card-four',
 	title: 'The 4 card (move backwards)',
 	body: "A 4 moves a pawn four spaces backwards — it's the only card that forces you to retreat. Sneaky strategy: if your pawn is near your Start, a 4 wraps around and lands you deep in the track, much closer to Home.",
-	cameraView: 'edge',
-	cameraAzimuth: Math.PI,
+	// Pan toward the Red/Green corner so both track 4 (start_exit) and
+	// track 0 (where the retreat lands) are visible.
+	cameraView: 'corner',
+	cameraAzimuth: -3 * Math.PI / 4,
+	cameraRadius: 3.0,
+	cameraTarget: [-0.9, 0, -1.2],
 	numPlayers: 4,
 	initialPlacements: [{ player: 0, pawn: 0, at: { kind: 'start_exit', player: 0 } }],
 	startingPlayer: 0,

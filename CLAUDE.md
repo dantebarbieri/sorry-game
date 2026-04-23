@@ -115,3 +115,25 @@ cd frontend && pnpm check                       # svelte-check
 - Package manager: **pnpm** exclusively (skyjo also uses pnpm).
 - WASM output path: `frontend/src/lib/pkg/` (inside the Svelte source tree so Vite can import the glue JS as an ES module), not `frontend/pkg/` or `frontend/static/pkg/`.
 - Game domain: Sorry! has a graph-shaped board and pawn-based movement rather than a grid of cards, so `Board`/`Rules` carry more structure than skyjo's grid dimensions.
+
+## Planned strategies
+
+Only **Random** is implemented in `sorry-core` today. These are the full specs for the other strategies — keep this section authoritative so `/rules` can stay brief. All strategies receive a `StrategyView` with all public knowledge (hand, pawn positions for all players, discard contents, deck size) and must route non-determinism through the provided `rng`.
+
+- **Random** *(shipped)* — picks a legal move uniformly at random. Baseline.
+
+- **Greedy** *(planned)* — always minimizes distance-to-home. Given multiple moves, picks the one that brings the average (or best) pawn closest to its home space. Ties broken by preferring safety-zone spaces.
+
+- **Not Sorry** *(planned)* — maximizes pawns out of Start. Any move that starts a pawn (1, 2, Sorry!) is taken whenever possible; otherwise plays as **Greedy**.
+
+- **Survivor** *(planned)* — attacks the current leader (smallest average distance-to-home among opponents) regardless of cost to its own position. Decision order:
+  1. **Bump the leader directly** with an Advance/Retreat that lands on a leader pawn. The 4 and 10 are self-cards — they cannot reverse an opponent. Their only anti-leader use is when a leader pawn sits exactly 4 behind (for a 4) or 1 behind (for a 10's backward option) one of Survivor's own pawns on the track, so the backwards move bumps it.
+  2. **Sorry! the leader** from Start whenever possible.
+  3. **11-swap with a leader pawn** whenever legal, regardless of whether the swap benefits Survivor's own position.
+  4. **Fallback**: play as **Greedy**.
+
+- **Reverse** *(planned)* — holds one primary pawn near its `start_exit`, hoping for a 4 (15-space forward-equivalent) or a chain of 10s to reach Home quickly. Secondary pawns stay in Start unless forced. Counts discard to estimate remaining 4s / 10s before committing the primary pawn forward.
+
+- **Teleporter** *(planned)* — **always** takes an 11-swap when legal, even if the swap moves its own pawn backwards along the track. When multiple swap targets exist, picks the one that maximizes its own distance around the board relative to its `start_exit`. Falls back to **Greedy** when no swap is available.
+
+- **Sidekick** *(planned)* — piles on whichever opponent most recently lost a pawn (had one bumped to Start). When no recent victim exists, plays as **Greedy**.

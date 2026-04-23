@@ -30,6 +30,12 @@
 		/** Override azimuth (radians) for `edge` / `corner` — skips the
 		 *  nearest-snap. Used to rotate to a specific seat. */
 		targetAzimuth?: number;
+		/** Override the camera radius (distance from target). Lower = zoomed in. */
+		targetRadius?: number;
+		/** Override the camera look-at point in board-local world coords.
+		 *  Default is the board center `[0, 0, 0]`. Use to pan to a player's
+		 *  side for close-up demos. */
+		targetPoint?: [number, number, number];
 	}
 
 	export interface StepCommand {
@@ -133,7 +139,12 @@
 
 	$effect(() => {
 		if (renderer && cameraCommand) {
-			renderer.setCameraView(cameraCommand.view, cameraCommand.targetAzimuth);
+			renderer.setCameraView(
+				cameraCommand.view,
+				cameraCommand.targetAzimuth,
+				cameraCommand.targetRadius,
+				cameraCommand.targetPoint
+			);
 		}
 	});
 
