@@ -200,10 +200,16 @@
 	/** True once the replay cursor is at the very end of the history. In
 	 *  Play Out this is when the last-place finisher has been appended
 	 *  by `finalize_winners`; in Standard it's the instant the winner
-	 *  lands their last pawn. */
+	 *  lands their last pawn.
+	 *
+	 *  Reads `cursorIndex` / `cursorLength` (both `$state`) rather than
+	 *  the cursor instance's getters, since Svelte 5 doesn't track plain
+	 *  class properties as reactive. */
 	const isAtGameEnd = $derived.by(() => {
-		if (!cursor || !history) return false;
-		return cursor.isAtEnd && (history.winners.length > 0 || history.truncated);
+		if (!history || cursorLength === 0) return false;
+		return (
+			cursorIndex >= cursorLength && (history.winners.length > 0 || history.truncated)
+		);
 	});
 
 	/** Winners to render in the placements panel. While mid-replay, use
