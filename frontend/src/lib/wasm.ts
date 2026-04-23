@@ -8,7 +8,11 @@ interface WasmApi {
 	get_board_geometry: (rules_name: string) => string;
 	get_available_rules: () => string;
 	get_available_strategies: () => string;
+	get_strategy_descriptions: () => string;
 	get_rules_info: (rules_name: string) => string;
+	simulate: (config_json: string) => string;
+	simulate_with_histories: (config_json: string) => string;
+	simulate_one: (config_json: string) => string;
 	simulate_one_with_history: (config_json: string) => string;
 	create_interactive_game: (config_json: string) => string;
 	get_game_state: (game_id: number, viewer: number) => string;
@@ -17,6 +21,8 @@ interface WasmApi {
 	get_game_history: (game_id: number) => string;
 	destroy_interactive_game: (game_id: number) => string;
 }
+
+export type { WasmApi };
 
 let cached: WasmApi | null = null;
 

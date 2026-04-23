@@ -5,7 +5,7 @@ import { defineConfig } from 'vitest/config';
 // without the sveltekit() plugin (which wants the runtime scaffolding).
 export default defineConfig({
 	test: {
-		include: ['src/lib/board/__tests__/**/*.test.ts'],
+		include: ['src/lib/**/__tests__/**/*.test.ts'],
 		environment: 'node'
 	}
 });

@@ -9,5 +9,11 @@ export default defineConfig({
 			// ../sorry-wasm or any future shared assets can be read).
 			allow: ['..']
 		}
+	},
+	worker: {
+		// ES modules — the simulation worker dynamically imports the
+		// generated WASM glue (`pkg/sorry_wasm.js`). IIFE (vite's default)
+		// doesn't support dynamic import / code splitting.
+		format: 'es'
 	}
 });
