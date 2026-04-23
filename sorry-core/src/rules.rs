@@ -79,6 +79,20 @@ pub trait Rules: Send + Sync {
     fn starting_player(&self, num_players: usize, rng: &mut dyn RngCore) -> PlayerId;
     fn is_winner(&self, board: &BoardState, player: PlayerId) -> bool;
     fn resolve_winners(&self, board: &BoardState, num_players: usize) -> Vec<PlayerId>;
+
+    /// Should the game end given the current ordered finish list?
+    /// Default: `true` as soon as any player has finished (standard
+    /// "first home wins"). Variants like Play Out return `true` only
+    /// when all-but-one player has finished, so the remaining players
+    /// keep going to establish a full 1st/2nd/3rd/4th placement order.
+    fn game_over(&self, winners: &[PlayerId], _num_players: usize) -> bool {
+        !winners.is_empty()
+    }
+
+    /// Hook called once the game is decided over, giving the ruleset a
+    /// chance to append trailing placements (e.g. Play Out's last-place
+    /// finisher). Default: no-op.
+    fn finalize_winners(&self, _winners: &mut Vec<PlayerId>, _num_players: usize) {}
 }
 
 // ─── StandardRules ──────────────────────────────────────────────────────
@@ -144,6 +158,12 @@ pub fn safety_entry_track(p: PlayerId) -> u32 {
 
 pub struct StandardRules {
     spaces: Vec<Space>,
+    /// Play Out variant flag. When true, the game continues after the
+    /// first finisher so remaining players establish a full placement
+    /// order (1st → 4th). Finished players are skipped by the engine's
+    /// turn loop. When false, the game ends as soon as any player gets
+    /// all four pawns home — classic Sorry!
+    play_out: bool,
 }
 
 impl Default for StandardRules {
@@ -154,6 +174,17 @@ impl Default for StandardRules {
 
 impl StandardRules {
     pub fn new() -> Self {
+        Self::build(false)
+    }
+
+    /// Constructor for the "Play Out" variant — same board and card
+    /// rules, but the game continues past the first finisher until only
+    /// one player is left on the board.
+    pub fn new_play_out() -> Self {
+        Self::build(true)
+    }
+
+    fn build(play_out: bool) -> Self {
         let mut spaces = Vec::with_capacity(88);
         for i in 0..NUM_TRACK {
             spaces.push(Space::Track(i));
@@ -169,7 +200,7 @@ impl StandardRules {
         for p in 0..NUM_SIDES as u8 {
             spaces.push(Space::Home(PlayerId(p)));
         }
-        Self { spaces }
+        Self { spaces, play_out }
     }
 
     pub fn classify_space(&self, id: SpaceId) -> Option<Space> {
@@ -192,7 +223,7 @@ impl StandardRules {
 
 impl Rules for StandardRules {
     fn name(&self) -> &str {
-        "Standard"
+        if self.play_out { "PlayOut" } else { "Standard" }
     }
 
     fn build_deck(&self) -> Vec<Card> {
@@ -554,6 +585,29 @@ impl Rules for StandardRules {
             .map(PlayerId)
             .filter(|p| self.is_winner(board, *p))
             .collect()
+    }
+
+    fn game_over(&self, winners: &[PlayerId], num_players: usize) -> bool {
+        if self.play_out {
+            // Play out until only one player is left on the board.
+            winners.len() >= num_players.saturating_sub(1)
+        } else {
+            !winners.is_empty()
+        }
+    }
+
+    fn finalize_winners(&self, winners: &mut Vec<PlayerId>, num_players: usize) {
+        if !self.play_out {
+            return;
+        }
+        // Append the one remaining unfinished player as last place so
+        // the winners vec captures the full placement order.
+        for p in 0..num_players as u8 {
+            let pid = PlayerId(p);
+            if !winners.contains(&pid) {
+                winners.push(pid);
+            }
+        }
     }
 }
 

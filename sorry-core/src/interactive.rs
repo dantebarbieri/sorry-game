@@ -417,19 +417,42 @@ impl InteractiveGame {
         let turn = self.current_turn.take().expect("turn in progress at finalize");
         self.history.turns.push(turn);
 
-        let winners = self
-            .rules
-            .resolve_winners(&self.board, self.history.num_players);
-        if !winners.is_empty() {
-            self.history.winners = winners.clone();
+        // Append the current player to the finish order if they just
+        // finished (and aren't already recorded). `history.winners` now
+        // acts as the ordered placement list: winners[0] finished first,
+        // winners[1] second, etc.
+        if won_mid_turn && !self.history.winners.contains(&player) {
+            self.history.winners.push(player);
+        }
+
+        let num_players = self.history.num_players;
+        if self.rules.game_over(&self.history.winners, num_players) {
+            self.rules
+                .finalize_winners(&mut self.history.winners, num_players);
             self.action_needed = ActionNeeded::GameOver {
-                winners,
+                winners: self.history.winners.clone(),
                 truncated: false,
             };
             return Ok(());
         }
-        let n = self.history.num_players as u8;
-        self.current = PlayerId((self.current.0 + 1) % n);
+
+        // Advance to the next unfinished player, skipping anyone already
+        // in `winners` — Play Out treats finished players as if they
+        // weren't at the table anymore (no draws, no turns).
+        let n = num_players as u8;
+        let mut next = (self.current.0 + 1) % n;
+        for _ in 0..n {
+            if !self
+                .history
+                .winners
+                .iter()
+                .any(|w| w.0 == next)
+            {
+                break;
+            }
+            next = (next + 1) % n;
+        }
+        self.current = PlayerId(next);
         self.begin_turn_or_game_over()
     }
 

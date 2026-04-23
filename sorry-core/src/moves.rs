@@ -132,7 +132,7 @@ pub fn legal_moves(
                 continue;
             }
             if let Some(to) = walk_forward(rules, player, from, n)
-                && !is_own_pawn_at(board, player, to)
+                && is_landable(rules, board, player, to)
             {
                 out.push(Move::Advance {
                     pawn,
@@ -152,7 +152,7 @@ pub fn legal_moves(
                 continue;
             }
             if let Some(to) = walk_backward(rules, player, from, n)
-                && !is_own_pawn_at(board, player, to)
+                && is_landable(rules, board, player, to)
             {
                 out.push(Move::Retreat {
                     pawn,
@@ -190,12 +190,18 @@ pub fn legal_moves(
                     let Some(to_b) = walk_forward(rules, player, from_b, b as i8) else {
                         continue;
                     };
-                    if is_own_pawn_at(board, player, to_a) || is_own_pawn_at(board, player, to_b) {
+                    if !is_landable(rules, board, player, to_a)
+                        || !is_landable(rules, board, player, to_b)
+                    {
                         continue;
                     }
-                    if to_a == to_b {
+                    if to_a == to_b
+                        && !matches!(rules.classify(to_a), Some(Space::Home(_)))
+                    {
                         // Two of your own pawns can't end up stacked on the
-                        // same outer-track space.
+                        // same outer-track or safety space — but Home is
+                        // a stacking space, so a 7 split as e.g. {1, 2}
+                        // sending two safety pawns home together is fine.
                         continue;
                     }
                     out.push(Move::SplitSeven {
@@ -278,6 +284,16 @@ pub fn legal_moves(
         }
     }
 
+    // 11's "may" clause: if the player cannot move 11 forward, they are
+    // not forced to swap — ending the turn is a legal alternative. This
+    // matches the official Hasbro rule ("A player who cannot move 11
+    // spaces is not forced to switch and instead can end their turn.")
+    // and mirrors the common house rule. The 11 is the only card that
+    // grants this election.
+    if rules.is_swap(card) && !out.iter().any(|m| matches!(m, Move::Advance { .. })) {
+        out.push(Move::Pass);
+    }
+
     if out.is_empty() {
         out.push(Move::Pass);
     }
@@ -298,6 +314,18 @@ fn is_on_outer_track(rules: &dyn Rules, space: SpaceId) -> bool {
 
 fn is_own_pawn_at(board: &BoardState, player: PlayerId, space: SpaceId) -> bool {
     board.pawns_of(player).contains(&space)
+}
+
+/// Destination-legality check. A pawn may land on `to` unless an own
+/// pawn already occupies that space — with the exception of `Home`,
+/// where multiple of a player's pawns stack (that's how the game ends).
+/// `StartArea` is technically a stacking space too, but no legal move
+/// *lands* at Start, so this only has to special-case Home.
+fn is_landable(rules: &dyn Rules, board: &BoardState, player: PlayerId, to: SpaceId) -> bool {
+    if matches!(rules.classify(to), Some(Space::Home(_))) {
+        return true;
+    }
+    !is_own_pawn_at(board, player, to)
 }
 
 fn walk_forward(rules: &dyn Rules, player: PlayerId, from: SpaceId, steps: i8) -> Option<SpaceId> {

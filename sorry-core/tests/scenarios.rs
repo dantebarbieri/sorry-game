@@ -370,6 +370,141 @@ fn one_card_not_blocked_by_own_pawn_one_past_start_exit() {
 }
 
 #[test]
+fn advance_to_home_is_legal_even_when_home_already_holds_own_pawn() {
+    // Regression: `is_own_pawn_at` was blocking any move to Home once a
+    // pawn had already parked there, which breaks late-game play. Home
+    // is a stacking space (that's how you win).
+    let rules = StandardRules::new();
+    let mut board = fresh_board(&rules, 4);
+    let p0 = PlayerId(0);
+    let home = rules.home(p0);
+    // Park pawn 1 at Home already.
+    board.set_position(p0, PawnId(1), home);
+    // Pawn 0 sits one step away, in the last safety slot.
+    board.set_position(p0, PawnId(0), rules.safety_space(p0, 4));
+    let legal = legal_moves(&rules, &board, p0, Card::One);
+    let advance = legal.iter().find(|m| matches!(
+        m,
+        Move::Advance { pawn, to, .. } if *pawn == PawnId(0) && *to == home
+    ));
+    assert!(
+        advance.is_some(),
+        "expected Advance pawn 0 → Home even with pawn 1 already at Home; got {legal:?}"
+    );
+}
+
+#[test]
+fn split_seven_allows_both_legs_to_home() {
+    // Regression for the `to_a == to_b` early-rejection: Home is a
+    // stacking space, so a 7 split whose legs each land at Home (e.g.
+    // 5+2 from the safety zone) is legal.
+    let rules = StandardRules::new();
+    let mut board = fresh_board(&rules, 4);
+    let p0 = PlayerId(0);
+    let home = rules.home(p0);
+    // Pawn 0 in the first safety slot — 5 steps from Home.
+    board.set_position(p0, PawnId(0), rules.safety_space(p0, 0));
+    // Pawn 1 in the 4th safety slot — 2 steps from Home.
+    board.set_position(p0, PawnId(1), rules.safety_space(p0, 3));
+    // The other two pawns stay in Start (default), where they can't
+    // contribute alternative splits.
+
+    let legal = legal_moves(&rules, &board, p0, Card::Seven);
+    let both_home = legal.iter().find(|m| matches!(
+        m,
+        Move::SplitSeven { first, second }
+            if first.pawn == PawnId(0) && first.steps == 5 && first.to == home
+               && second.pawn == PawnId(1) && second.steps == 2 && second.to == home
+    ));
+    assert!(
+        both_home.is_some(),
+        "expected Split 7 as pawn 0 (5 steps) + pawn 1 (2 steps) both → Home; got {legal:?}"
+    );
+}
+
+#[test]
+fn split_seven_leg_to_home_legal_when_other_pawn_already_home() {
+    // If one pawn is already at Home, a split that sends another pawn
+    // there should still be legal — Home stacks.
+    let rules = StandardRules::new();
+    let mut board = fresh_board(&rules, 4);
+    let p0 = PlayerId(0);
+    let home = rules.home(p0);
+    board.set_position(p0, PawnId(2), home); // already home
+    board.set_position(p0, PawnId(0), rules.safety_space(p0, 4)); // 1 from home
+    board.set_position(p0, PawnId(1), rules.track_space(25));
+    // Leave pawn 3 in Start (default).
+
+    let legal = legal_moves(&rules, &board, p0, Card::Seven);
+    // Some Split-7 exists whose first leg is pawn 0 going 1 step to Home
+    // (paired with pawn 1's 6-step advance).
+    let has_home_split = legal.iter().any(|m| matches!(
+        m,
+        Move::SplitSeven { first, second }
+            if first.pawn == PawnId(0) && first.to == home && second.pawn == PawnId(1)
+    ));
+    assert!(
+        has_home_split,
+        "expected a Split 7 sending pawn 0 home while pawn 1 advances; got {legal:?}"
+    );
+}
+
+#[test]
+fn eleven_allows_pass_when_advance_blocked_but_swap_available() {
+    // Per the Hasbro rule text, a player who cannot move 11 forward is
+    // *not* forced to swap — ending the turn is a legal alternative.
+    // Construct: pawn 0 on the outer track whose +11 destination is
+    // Safety(3) (for P0), which is blocked by our own pawn 1. Pawns 2
+    // and 3 stay in Start so they can't Advance. Opponent pawn on the
+    // outer track to make swap available.
+    let rules = StandardRules::new();
+    let mut board = fresh_board(&rules, 4);
+    let p0 = PlayerId(0);
+    let p1 = PlayerId(1);
+    // Walking 11 from track 55 lands in Safety(3) for P0:
+    //   55 → 56 → 57 → 58 → 59 → 0 → 1 → 2 → Safety(0) → Safety(1) →
+    //   Safety(2) → Safety(3).
+    board.set_position(p0, PawnId(0), rules.track_space(55));
+    board.set_position(p0, PawnId(1), rules.safety_space(p0, 3));
+    // Opponent pawn on the outer track — enables swap.
+    board.set_position(p1, PawnId(0), rules.track_space(30));
+
+    let legal = legal_moves(&rules, &board, p0, Card::Eleven);
+    assert!(
+        !legal.iter().any(|m| matches!(m, Move::Advance { .. })),
+        "Advance-11 shouldn't be legal (own pawn blocks the landing); got {legal:?}"
+    );
+    assert!(
+        legal.iter().any(|m| matches!(m, Move::SwapEleven { .. })),
+        "expected a SwapEleven option; got {legal:?}"
+    );
+    assert!(
+        legal.iter().any(|m| matches!(m, Move::Pass)),
+        "expected Pass as an optional forfeit when Advance-11 is blocked; got {legal:?}"
+    );
+}
+
+#[test]
+fn eleven_does_not_offer_pass_when_advance_is_legal() {
+    // The Pass escape is only there when you *can't* move 11; otherwise
+    // the normal "use your card if you can" rule applies.
+    let rules = StandardRules::new();
+    let mut board = fresh_board(&rules, 4);
+    let p0 = PlayerId(0);
+    board.set_position(p0, PawnId(0), rules.track_space(5));
+    // No own pawn at track 16 this time — Advance-11 is legal.
+    let legal = legal_moves(&rules, &board, p0, Card::Eleven);
+    assert!(
+        legal.iter().any(|m| matches!(m, Move::Advance { card_value: 11, .. })),
+        "expected Advance-11 to be legal; got {legal:?}"
+    );
+    assert!(
+        !legal.iter().any(|m| matches!(m, Move::Pass)),
+        "Pass must not be offered when Advance-11 is available; got {legal:?}"
+    );
+}
+
+#[test]
 fn space_enum_used_through_trait_classify() {
     // Sanity: the Rules trait's classify() returns Space enum correctly.
     let rules = StandardRules::new();
