@@ -16,6 +16,13 @@ pub enum ClientMessage {
     Action { action: PlayerAction },
     PlayAgain,
     ReturnToLobby,
+    /// Seated player or spectator takes an Empty/Bot slot. For seated
+    /// players, their old slot becomes Empty; for spectators, they leave
+    /// the spectator list. Lobby phase only.
+    TakeSlot { slot: usize },
+    /// Seated player drops to the spectator list; their slot becomes
+    /// Empty. Lobby phase only.
+    BecomeSpectator,
     Ping,
 }
 
@@ -89,10 +96,20 @@ pub struct LobbyPlayer {
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct LobbySpectator {
+    pub idx: usize,
+    pub name: String,
+    pub connected: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub disconnect_secs: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize)]
 pub struct RoomLobbyState {
     pub room_code: String,
     pub phase: String,
     pub players: Vec<LobbyPlayer>,
+    pub spectators: Vec<LobbySpectator>,
     pub num_players: usize,
     pub rules: String,
     pub creator: usize,
@@ -137,6 +154,17 @@ pub struct RoomInfoResponse {
     pub rules: String,
     pub players_joined: usize,
     pub phase: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct SpectateRoomRequest {
+    pub player_name: String,
+}
+
+#[derive(Debug, Serialize)]
+pub struct SpectateRoomResponse {
+    pub session_token: String,
+    pub spectator_index: usize,
 }
 
 #[derive(Debug, Serialize)]

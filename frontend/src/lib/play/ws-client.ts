@@ -19,10 +19,18 @@ export type PlayerSlotType =
 	| { kind: 'Bot'; strategy: string }
 	| { kind: 'Empty' };
 
+export interface LobbySpectator {
+	idx: number;
+	name: string;
+	connected: boolean;
+	disconnect_secs?: number;
+}
+
 export interface RoomLobbyState {
 	room_code: string;
 	phase: string;
 	players: LobbyPlayer[];
+	spectators: LobbySpectator[];
 	num_players: number;
 	rules: string;
 	creator: number;
@@ -56,6 +64,8 @@ export type ClientMessage =
 	| { type: 'Action'; action: PlayerAction }
 	| { type: 'PlayAgain' }
 	| { type: 'ReturnToLobby' }
+	| { type: 'TakeSlot'; slot: number }
+	| { type: 'BecomeSpectator' }
 	| { type: 'Ping' };
 
 export type ServerMessage =

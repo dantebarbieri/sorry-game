@@ -22,10 +22,10 @@ use serde::Deserialize;
 use tower_http::compression::CompressionLayer;
 use tower_http::cors::CorsLayer;
 
-use lobby::Lobby;
+use lobby::{Lobby, SessionRef};
 use messages::{
     CreateRoomRequest, CreateRoomResponse, JoinRoomRequest, JoinRoomResponse, MetaResponse,
-    PlayerSlotType, RoomInfoResponse,
+    PlayerSlotType, RoomInfoResponse, SpectateRoomRequest, SpectateRoomResponse,
 };
 
 pub struct AppStateInner {
@@ -39,6 +39,7 @@ pub fn build_app(state: AppState, cors_origin: Option<HeaderValue>) -> Router {
         .route("/rooms", post(create_room))
         .route("/rooms/{code}", get(room_info))
         .route("/rooms/{code}/join", post(join_room))
+        .route("/rooms/{code}/spectate", post(spectate_room))
         .route("/rooms/{code}/ws", get(ws_upgrade))
         .route("/meta", get(meta));
 
@@ -111,6 +112,22 @@ async fn join_room(
     }))
 }
 
+async fn spectate_room(
+    State(state): State<AppState>,
+    Path(code): Path<String>,
+    Json(req): Json<SpectateRoomRequest>,
+) -> Result<Json<SpectateRoomResponse>, (StatusCode, String)> {
+    let (token, spectator_index) = state
+        .lobby
+        .spectate_room(&code, req.player_name)
+        .await
+        .map_err(|e| (StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(SpectateRoomResponse {
+        session_token: token.to_string(),
+        spectator_index,
+    }))
+}
+
 #[derive(Deserialize)]
 struct WsQuery {
     token: String,
@@ -123,12 +140,12 @@ async fn ws_upgrade(
     ConnectInfo(_addr): ConnectInfo<SocketAddr>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, (StatusCode, String)> {
-    let (room_code, player_index) = state
+    let session = state
         .lobby
         .get_session(&query.token)
         .ok_or((StatusCode::UNAUTHORIZED, "Invalid session token".to_string()))?;
 
-    if room_code != code {
+    if session.code() != code {
         return Err((
             StatusCode::FORBIDDEN,
             "Token does not match this room".to_string(),
@@ -140,8 +157,16 @@ async fn ws_upgrade(
         .get_room(&code)
         .ok_or((StatusCode::NOT_FOUND, "Room not found".to_string()))?;
 
+    let token = query.token;
     Ok(ws.on_upgrade(move |socket| async move {
-        ws::handle_ws(socket, state, room, room_code, player_index).await;
+        match session {
+            SessionRef::Player { code: room_code, slot } => {
+                ws::handle_player_ws(socket, state, room, room_code, slot).await;
+            }
+            SessionRef::Spectator { code: room_code } => {
+                ws::handle_spectator_ws(socket, state, room, room_code, token).await;
+            }
+        }
     }))
 }
 

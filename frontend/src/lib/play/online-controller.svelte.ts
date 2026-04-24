@@ -29,6 +29,8 @@ function playerViewToGameState(pv: PlayerView): GameStateView {
 	};
 }
 
+export type OnlineRole = 'player' | 'spectator';
+
 export class OnlineController implements PlayController {
 	#ws: RoomWsClient | null = null;
 	#geometry = $state<BoardGeometry | null>(null);
@@ -37,6 +39,7 @@ export class OnlineController implements PlayController {
 	#lobby = $state<RoomLobbyState | null>(null);
 	#status = $state<'idle' | 'connecting' | 'connected' | 'closed'>('idle');
 	#viewer = $state<number | null>(null);
+	#role = $state<OnlineRole>('player');
 	#setup = $state<PlaySetup>(DEFAULT_SETUP);
 
 	get geometry() {
@@ -71,9 +74,16 @@ export class OnlineController implements PlayController {
 	get viewer() {
 		return this.#viewer;
 	}
+	get role() {
+		return this.#role;
+	}
+	get spectators() {
+		return this.#lobby?.spectators ?? [];
+	}
 
-	async connect(baseUrl: string, code: string, token: string, viewer: number) {
-		this.#viewer = viewer;
+	async connect(baseUrl: string, code: string, token: string, viewer: number, role: OnlineRole = 'player') {
+		this.#role = role;
+		this.#viewer = role === 'spectator' ? null : viewer;
 		this.#status = 'connecting';
 		this.#error = null;
 		// Load board geometry once — rules name comes from the server's
@@ -188,5 +198,16 @@ export class OnlineController implements PlayController {
 	}
 	returnToLobby() {
 		this.#ws?.send({ type: 'ReturnToLobby' });
+	}
+	takeSlot(slot: number) {
+		this.#ws?.send({ type: 'TakeSlot', slot });
+	}
+	becomeSpectator() {
+		this.#ws?.send({ type: 'BecomeSpectator' });
+		// The server updates our session to a spectator role; from this
+		// point on the same socket is filtered as a spectator. Locally we
+		// flip our view state so the UI hides "my" seat affordances.
+		this.#role = 'spectator';
+		this.#viewer = null;
 	}
 }

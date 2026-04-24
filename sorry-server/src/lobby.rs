@@ -6,16 +6,32 @@ use rand::Rng;
 use tokio::sync::Mutex;
 
 use crate::messages::{PlayerSlotType, ServerMessage};
-use crate::room::{Room, RoomPhase, SharedRoom};
+use crate::room::{BroadcastTarget, Room, RoomPhase, SharedRoom};
 use crate::session::SessionToken;
 
 const ROOM_CODE_ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const ROOM_CODE_LEN: usize = 6;
 const LOBBY_IDLE_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
+/// Who a session token authenticates as inside a room.
+#[derive(Debug, Clone)]
+pub enum SessionRef {
+    Player { code: String, slot: usize },
+    Spectator { code: String },
+}
+
+impl SessionRef {
+    pub fn code(&self) -> &str {
+        match self {
+            SessionRef::Player { code, .. } => code,
+            SessionRef::Spectator { code } => code,
+        }
+    }
+}
+
 pub struct Lobby {
     pub rooms: DashMap<String, SharedRoom>,
-    pub sessions: DashMap<String, (String, usize)>,
+    pub sessions: DashMap<String, SessionRef>,
     pub max_rooms: usize,
 }
 
@@ -63,8 +79,13 @@ impl Lobby {
 
         let shared = Arc::new(Mutex::new(room));
         self.rooms.insert(code.clone(), shared);
-        self.sessions
-            .insert(token.to_string(), (code.clone(), player_index));
+        self.sessions.insert(
+            token.to_string(),
+            SessionRef::Player {
+                code: code.clone(),
+                slot: player_index,
+            },
+        );
 
         Ok((code, token, player_index))
     }
@@ -93,13 +114,18 @@ impl Lobby {
         room.players[slot].disconnected_at = None;
         room.touch();
 
-        self.sessions
-            .insert(token.to_string(), (code.to_string(), slot));
+        self.sessions.insert(
+            token.to_string(),
+            SessionRef::Player {
+                code: code.to_string(),
+                slot,
+            },
+        );
 
         for (i, p) in room.players.iter().enumerate() {
             if i != slot && p.connected {
                 let _ = room.broadcast_tx.send((
-                    i,
+                    BroadcastTarget::Player(i),
                     ServerMessage::PlayerJoined {
                         player_index: slot,
                         name: player_name.clone(),
@@ -111,7 +137,31 @@ impl Lobby {
         Ok((token, slot))
     }
 
-    pub fn get_session(&self, token: &str) -> Option<(String, usize)> {
+    /// Join a room as a spectator. No phase restriction — spectators can
+    /// join in lobby, mid-game, or post-game. Returns the session token
+    /// and the newly appended spectator index.
+    pub async fn spectate_room(
+        &self,
+        code: &str,
+        player_name: String,
+    ) -> Result<(SessionToken, usize), String> {
+        let room_ref = self.rooms.get(code).ok_or("Room not found")?.clone();
+        let mut room = room_ref.lock().await;
+
+        let token = SessionToken::new();
+        let idx = room.add_spectator(player_name, token.clone());
+
+        self.sessions.insert(
+            token.to_string(),
+            SessionRef::Spectator {
+                code: code.to_string(),
+            },
+        );
+
+        Ok((token, idx))
+    }
+
+    pub fn get_session(&self, token: &str) -> Option<SessionRef> {
         self.sessions.get(token).map(|entry| entry.clone())
     }
 
@@ -144,6 +194,9 @@ impl Lobby {
                         if let Some(token) = &p.session_token {
                             self.sessions.remove(token.as_str());
                         }
+                    }
+                    for s in &room.spectators {
+                        self.sessions.remove(s.session_token.as_str());
                     }
                     to_remove.push(code);
                 }

@@ -3,11 +3,13 @@
 	import {
 		createRoom,
 		joinRoom,
+		spectateRoom,
 		DEFAULT_SERVER_URL,
 		type CreateRoomResponse,
-		type JoinRoomResponse
+		type JoinRoomResponse,
+		type SpectateRoomResponse
 	} from '$lib/play/rest-client';
-	import type { OnlineController } from '$lib/play/online-controller.svelte';
+	import type { OnlineController, OnlineRole } from '$lib/play/online-controller.svelte';
 	import { PLAYER_NAMES } from '$lib/play/types';
 	import { useTheme } from '$lib/theme-context.svelte';
 
@@ -26,10 +28,12 @@
 		baseUrl: string;
 		code: string;
 		token: string;
-		playerIndex: number;
+		role: OnlineRole;
+		/** Seat index for players, spectator index for spectators. */
+		index: number;
 	};
 
-	let mode = $state<'landing' | 'creating' | 'joining' | 'connected'>('landing');
+	let mode = $state<'landing' | 'creating' | 'joining' | 'spectating' | 'connected'>('landing');
 	let baseUrl = $state(DEFAULT_SERVER_URL);
 	let playerName = $state('');
 	let numPlayers = $state(4);
@@ -40,7 +44,13 @@
 	onMount(async () => {
 		const stored = loadSession();
 		if (stored) {
-			await controller.connect(stored.baseUrl, stored.code, stored.token, stored.playerIndex);
+			await controller.connect(
+				stored.baseUrl,
+				stored.code,
+				stored.token,
+				stored.index,
+				stored.role
+			);
 			mode = 'connected';
 			onConnected();
 		}
@@ -51,7 +61,18 @@
 		const raw = sessionStorage.getItem(SESSION_KEY);
 		if (!raw) return null;
 		try {
-			return JSON.parse(raw) as Session;
+			const parsed = JSON.parse(raw) as Partial<Session> & { playerIndex?: number };
+			// Back-compat: previous versions stored { playerIndex } without role.
+			if (!parsed.role) {
+				return {
+					baseUrl: parsed.baseUrl ?? DEFAULT_SERVER_URL,
+					code: parsed.code ?? '',
+					token: parsed.token ?? '',
+					role: 'player',
+					index: parsed.playerIndex ?? parsed.index ?? 0
+				};
+			}
+			return parsed as Session;
 		} catch {
 			return null;
 		}
@@ -79,14 +100,15 @@
 				{ player_name: playerName.trim(), num_players: numPlayers, rules: rulesChoice },
 				baseUrl
 			);
-			const session = {
+			const session: Session = {
 				baseUrl,
 				code: res.room_code,
 				token: res.session_token,
-				playerIndex: res.player_index
+				role: 'player',
+				index: res.player_index
 			};
 			saveSession(session);
-			await controller.connect(baseUrl, res.room_code, res.session_token, res.player_index);
+			await controller.connect(baseUrl, res.room_code, res.session_token, res.player_index, 'player');
 			mode = 'connected';
 			onConnected();
 		} catch (e) {
@@ -105,14 +127,46 @@
 		try {
 			const code = roomCode.trim().toUpperCase();
 			const res: JoinRoomResponse = await joinRoom(code, { player_name: playerName.trim() }, baseUrl);
-			const session = {
+			const session: Session = {
 				baseUrl,
 				code,
 				token: res.session_token,
-				playerIndex: res.player_index
+				role: 'player',
+				index: res.player_index
 			};
 			saveSession(session);
-			await controller.connect(baseUrl, code, res.session_token, res.player_index);
+			await controller.connect(baseUrl, code, res.session_token, res.player_index, 'player');
+			mode = 'connected';
+			onConnected();
+		} catch (e) {
+			error = e instanceof Error ? e.message : String(e);
+			mode = 'landing';
+		}
+	}
+
+	async function doSpectate() {
+		if (!playerName.trim() || !roomCode.trim()) {
+			error = 'Enter name and room code';
+			return;
+		}
+		error = null;
+		mode = 'spectating';
+		try {
+			const code = roomCode.trim().toUpperCase();
+			const res: SpectateRoomResponse = await spectateRoom(
+				code,
+				{ player_name: playerName.trim() },
+				baseUrl
+			);
+			const session: Session = {
+				baseUrl,
+				code,
+				token: res.session_token,
+				role: 'spectator',
+				index: res.spectator_index
+			};
+			saveSession(session);
+			await controller.connect(baseUrl, code, res.session_token, res.spectator_index, 'spectator');
 			mode = 'connected';
 			onConnected();
 		} catch (e) {
@@ -132,9 +186,34 @@
 		if (code) void navigator.clipboard?.writeText(code);
 	}
 
+	function onBecomeSpectator() {
+		controller.becomeSpectator();
+		// Rewrite session so a reload comes back as a spectator.
+		const lobby = controller.lobby;
+		const stored = loadSession();
+		if (stored && lobby) {
+			saveSession({ ...stored, role: 'spectator', index: lobby.spectators.length });
+		}
+	}
+
+	function onTakeSlot(slot: number) {
+		controller.takeSlot(slot);
+		// For seated players this doesn't change role; the server will
+		// reply with an updated RoomState. Update stored seat index so a
+		// reload targets the correct slot.
+		const stored = loadSession();
+		if (stored && stored.role === 'player') {
+			saveSession({ ...stored, index: slot });
+		}
+	}
+
 	const lobby = $derived(controller.lobby);
-	const isHost = $derived(lobby !== null && controller.viewer === lobby.creator);
+	const isHost = $derived(
+		lobby !== null && controller.role === 'player' && controller.viewer === lobby.creator
+	);
 	const phase = $derived(lobby?.phase ?? 'unknown');
+	const isSpectator = $derived(controller.role === 'spectator');
+	const mySeat = $derived(controller.role === 'player' ? controller.viewer : null);
 </script>
 
 {#if mode !== 'connected'}
@@ -153,7 +232,7 @@
 			<input type="text" bind:value={playerName} placeholder="Name" />
 		</label>
 
-		<div class="two-col">
+		<div class="three-col">
 			<fieldset>
 				<legend>Create a room</legend>
 				<label>
@@ -188,6 +267,14 @@
 				</label>
 				<button class="primary" onclick={doJoin} disabled={mode !== 'landing'}>Join</button>
 			</fieldset>
+
+			<fieldset>
+				<legend>Spectate</legend>
+				<p class="hint">Watch any room — no seat required.</p>
+				<button class="primary" onclick={doSpectate} disabled={mode !== 'landing'}>
+					Spectate
+				</button>
+			</fieldset>
 		</div>
 
 		{#if error}
@@ -204,8 +291,14 @@
 				<span class="phase">{phase}</span>
 			</div>
 			<div class="lobby-actions">
+				{#if isSpectator}
+					<span class="badge-spec" title="You are spectating">Spectating</span>
+				{/if}
 				{#if isHost && phase === 'lobby'}
 					<button class="primary" onclick={() => controller.startGame()}>Start game</button>
+				{/if}
+				{#if !isSpectator && phase === 'lobby' && mySeat !== null}
+					<button onclick={onBecomeSpectator}>Become spectator</button>
 				{/if}
 				{#if phase === 'post-game'}
 					<button class="primary" onclick={() => controller.newGame()}>Play again</button>
@@ -217,7 +310,7 @@
 
 		<section class="slots">
 			{#each lobby.players as player (player.slot)}
-				<div class="slot" class:you={player.slot === controller.viewer}>
+				<div class="slot" class:you={player.slot === mySeat}>
 					<span
 						class="dot"
 						style:background={theme.skin.palette.players[player.slot]}
@@ -234,7 +327,12 @@
 							<em>Empty</em>
 						{/if}
 					</span>
-					{#if isHost && phase === 'lobby' && player.slot !== controller.viewer}
+					{#if phase === 'lobby' && player.player_type.kind !== 'Human' && player.slot !== mySeat}
+						<button class="take" onclick={() => onTakeSlot(player.slot)}>
+							Take this color
+						</button>
+					{/if}
+					{#if isHost && phase === 'lobby' && player.slot !== mySeat}
 						<select
 							class="type-picker"
 							value={player.player_type.kind === 'Bot' ? `Bot:${player.player_type.strategy}` : player.player_type.kind}
@@ -259,12 +357,33 @@
 								<option value={'Bot:' + s}>Bot · {s}</option>
 							{/each}
 						</select>
-						<button onclick={() => controller.kickPlayer(player.slot)} class="kick">
-							Kick
-						</button>
+						{#if player.player_type.kind === 'Human'}
+							<button onclick={() => controller.kickPlayer(player.slot)} class="kick">
+								Kick
+							</button>
+						{/if}
 					{/if}
 				</div>
 			{/each}
+		</section>
+
+		<section class="spectators">
+			<h3>
+				Spectators
+				<span class="count">{lobby.spectators.length}</span>
+			</h3>
+			{#if lobby.spectators.length === 0}
+				<p class="hint">No spectators yet.</p>
+			{:else}
+				<ul>
+					{#each lobby.spectators as spec (spec.idx)}
+						<li class:you={isSpectator && spec.idx === controller.viewer}>
+							<span class="name">{spec.name || 'Anonymous'}</span>
+							{#if !spec.connected}<em class="dim">disconnected</em>{/if}
+						</li>
+					{/each}
+				</ul>
+			{/if}
 		</section>
 
 		{#if controller.error}
@@ -312,13 +431,13 @@
 		background: rgba(0, 0, 0, 0.03);
 		border-color: rgba(0, 0, 0, 0.12);
 	}
-	.two-col {
+	.three-col {
 		display: grid;
-		grid-template-columns: 1fr 1fr;
+		grid-template-columns: 1fr 1fr 1fr;
 		gap: 1rem;
 	}
-	@media (max-width: 36rem) {
-		.two-col {
+	@media (max-width: 40rem) {
+		.three-col {
 			grid-template-columns: 1fr;
 		}
 	}
@@ -361,6 +480,67 @@
 	button.kick {
 		font-size: 0.75rem;
 		padding: 0.2rem 0.5rem;
+	}
+	button.take {
+		font-size: 0.75rem;
+		padding: 0.2rem 0.5rem;
+		background: rgba(246, 196, 84, 0.12);
+		border-color: rgba(246, 196, 84, 0.5);
+	}
+	.badge-spec {
+		font-size: 0.75rem;
+		padding: 0.2rem 0.5rem;
+		border-radius: 4px;
+		background: rgba(120, 180, 255, 0.18);
+		border: 1px solid rgba(120, 180, 255, 0.5);
+	}
+	.spectators {
+		display: flex;
+		flex-direction: column;
+		gap: 0.3rem;
+		padding-top: 0.5rem;
+		border-top: 1px solid rgba(255, 255, 255, 0.08);
+	}
+	:global(.app[data-skin='light']) .spectators {
+		border-top-color: rgba(0, 0, 0, 0.08);
+	}
+	.spectators h3 {
+		margin: 0;
+		font-size: 0.85rem;
+		font-weight: 600;
+		opacity: 0.75;
+		display: flex;
+		align-items: center;
+		gap: 0.5rem;
+	}
+	.spectators .count {
+		font-size: 0.75rem;
+		opacity: 0.6;
+	}
+	.spectators ul {
+		margin: 0;
+		padding: 0;
+		list-style: none;
+		display: flex;
+		flex-wrap: wrap;
+		gap: 0.4rem;
+	}
+	.spectators li {
+		padding: 0.2rem 0.55rem;
+		border-radius: 4px;
+		background: rgba(255, 255, 255, 0.04);
+		font-size: 0.85rem;
+	}
+	:global(.app[data-skin='light']) .spectators li {
+		background: rgba(0, 0, 0, 0.03);
+	}
+	.spectators li.you {
+		outline: 1px solid rgba(246, 196, 84, 0.5);
+	}
+	.spectators .dim {
+		opacity: 0.6;
+		margin-left: 0.35rem;
+		font-style: italic;
 	}
 	.err {
 		color: salmon;

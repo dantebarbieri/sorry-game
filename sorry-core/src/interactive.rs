@@ -370,21 +370,28 @@ impl InteractiveGame {
     }
 
     pub fn get_player_view(&self, viewer: PlayerId) -> PlayerView {
-        let drawn_card = if viewer == self.current {
-            self.current_drawn_card_if_faceup()
-        } else {
-            None
+        self.redacted_view(Some(viewer))
+    }
+
+    /// Spectator view — all hands redacted, drawn card hidden. The embedded
+    /// `viewer` field is set to `PlayerId(u8::MAX)` as a sentinel; callers
+    /// driving this view track observer state out-of-band.
+    pub fn get_observer_view(&self) -> PlayerView {
+        self.redacted_view(None)
+    }
+
+    fn redacted_view(&self, viewer: Option<PlayerId>) -> PlayerView {
+        let drawn_card = match viewer {
+            Some(v) if v == self.current => self.current_drawn_card_if_faceup(),
+            _ => None,
         };
         let hands: Vec<Option<Vec<Card>>> = self
             .hands
             .iter()
             .enumerate()
-            .map(|(p, h)| {
-                if PlayerId(p as u8) == viewer {
-                    Some(h.clone())
-                } else {
-                    None
-                }
+            .map(|(p, h)| match viewer {
+                Some(v) if PlayerId(p as u8) == v => Some(h.clone()),
+                _ => None,
             })
             .collect();
         let action_needed = match &self.action_needed {
@@ -392,7 +399,7 @@ impl InteractiveGame {
                 player,
                 hand: _,
                 legal_card_indices,
-            } if *player != viewer => ActionNeeded::ChooseCard {
+            } if Some(*player) != viewer => ActionNeeded::ChooseCard {
                 player: *player,
                 hand: Vec::new(),
                 legal_card_indices: legal_card_indices.clone(),
@@ -400,7 +407,7 @@ impl InteractiveGame {
             other => other.clone(),
         };
         PlayerView {
-            viewer,
+            viewer: viewer.unwrap_or(PlayerId(u8::MAX)),
             num_players: self.history.num_players,
             current_player: self.current,
             starting_player: self.history.starting_player,

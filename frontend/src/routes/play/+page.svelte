@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { onDestroy, onMount } from 'svelte';
+	import { onDestroy } from 'svelte';
 	import type { CameraCommand } from '$lib/board/BoardCanvas.svelte';
 	import type { CameraView } from '$lib/board/renderer';
 	import { passIsLegal } from '$lib/board/selection';
@@ -8,14 +8,11 @@
 	import { OnlineController } from '$lib/play/online-controller.svelte';
 	import {
 		activeSeatSides,
-		DEFAULT_SETUP,
-		type PlaySetup,
 		type PlayController,
 		type ViewerSeat
 	} from '$lib/play/types';
-	import { loadSetup, saveSetup } from '$lib/play/session';
 	import { useTheme } from '$lib/theme-context.svelte';
-	import SetupDrawer from '$lib/components/play/SetupDrawer.svelte';
+	import LocalPreGame from '$lib/components/play/LocalPreGame.svelte';
 	import Hud from '$lib/components/play/Hud.svelte';
 	import PlayControls from '$lib/components/play/PlayControls.svelte';
 	import InteractiveBoard from '$lib/components/play/InteractiveBoard.svelte';
@@ -26,9 +23,6 @@
 	const online = new OnlineController();
 
 	let mode = $state<'local' | 'online'>('local');
-	let setupOpen = $state(true);
-	let initialSetupNeeded = $state(true);
-	let pendingSetup = $state<PlaySetup>(DEFAULT_SETUP);
 	let viewer = $state<ViewerSeat>(0);
 	let autoStep = $state(true);
 	let autoPass = $state(true);
@@ -38,28 +32,12 @@
 	let lastAnnouncement = $state('');
 	let selectedPawn = $state<{ player: number; pawn: number } | null>(null);
 	let pendingLeg1 = $state<SplitLeg | null>(null);
-
-	onMount(() => {
-		// Hydrate the drawer with the user's last setup, but don't start
-		// the game yet — the user configures first, then clicks Start.
-		pendingSetup = loadSetup() ?? DEFAULT_SETUP;
-	});
+	let localNewGameRequested = $state(false);
 
 	onDestroy(() => {
 		local.destroy();
 		online.disconnect();
 	});
-
-	/** First engine-player index whose seat is Human, or null. The
-	 *  returned value is a PlayerId (indexes `gameState.pawn_positions`),
-	 *  not a board side. */
-	function computeInitialViewer(setup: PlaySetup): ViewerSeat {
-		const sides = activeSeatSides(setup);
-		for (let engineIdx = 0; engineIdx < sides.length; engineIdx++) {
-			if (setup.seats[sides[engineIdx]].type === 'Human') return engineIdx;
-		}
-		return null;
-	}
 
 	function edgeAzimuthForSide(side: number): number {
 		const map = [Math.PI, Math.PI / 2, 0, -Math.PI / 2];
@@ -114,16 +92,11 @@
 		}
 	});
 
-	async function handleApplySetup(setup: PlaySetup) {
-		saveSetup(setup);
-		pendingSetup = setup;
-		await local.newGame(setup);
-		viewer = computeInitialViewer(setup);
+	function onLocalGameStarted(v: ViewerSeat) {
+		viewer = v;
 		rotateCameraTo(viewer);
 		selectedPawn = null;
 		pendingLeg1 = null;
-		setupOpen = false;
-		initialSetupNeeded = false;
 	}
 
 	function onPickView(view: CameraView) {
@@ -169,7 +142,7 @@
 		if (mode === 'online') {
 			void online.newGame();
 		} else {
-			setupOpen = true;
+			localNewGameRequested = true;
 		}
 	}
 
@@ -199,11 +172,9 @@
 
 	{#if mode === 'online' && !showBoard}
 		<OnlineLobby controller={online} onConnected={() => { /* lobby shown until phase leaves 'lobby' */ }} />
-	{:else if mode === 'local' && !showBoard}
-		<div class="pre-game">
-			<p>Configure the game to begin.</p>
-			<button class="primary" onclick={() => (setupOpen = true)}>Configure</button>
-		</div>
+	{:else if !showBoard}
+		<!-- Local mode pre-game pane; the drawer lives in LocalPreGame and
+		     also handles the mid-game "new game" reopen. -->
 	{:else}
 		<Hud
 			skin={theme.skin}
@@ -250,13 +221,14 @@
 	{/if}
 </div>
 
-<SetupDrawer
-	open={setupOpen}
-	setup={initialSetupNeeded ? pendingSetup : local.setup}
-	required={initialSetupNeeded}
-	onApply={handleApplySetup}
-	onClose={() => (setupOpen = false)}
-/>
+{#if mode === 'local'}
+	<LocalPreGame
+		controller={local}
+		onGameStarted={onLocalGameStarted}
+		newGameRequested={localNewGameRequested}
+		onNewGameHandled={() => (localNewGameRequested = false)}
+	/>
+{/if}
 
 <style>
 	.play {
@@ -296,25 +268,5 @@
 	.tabs button:disabled {
 		opacity: 0.35;
 		cursor: not-allowed;
-	}
-	.pre-game {
-		flex: 1;
-		display: flex;
-		flex-direction: column;
-		align-items: center;
-		justify-content: center;
-		gap: 1rem;
-		padding: 4rem 1rem;
-		opacity: 0.9;
-	}
-	.pre-game .primary {
-		background: rgba(246, 196, 84, 0.25);
-		border: 1px solid rgba(246, 196, 84, 0.7);
-		color: inherit;
-		padding: 0.5rem 1.25rem;
-		border-radius: 6px;
-		font: inherit;
-		font-weight: 600;
-		cursor: pointer;
 	}
 </style>

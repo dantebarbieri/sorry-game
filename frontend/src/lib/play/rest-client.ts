@@ -17,6 +17,14 @@ export interface JoinRoomResponse {
 	player_index: number;
 }
 
+export interface SpectateRoomRequest {
+	player_name: string;
+}
+export interface SpectateRoomResponse {
+	session_token: string;
+	spectator_index: number;
+}
+
 export interface RoomInfoResponse {
 	room_code: string;
 	num_players: number;
@@ -80,6 +88,10 @@ export function createRoom(req: CreateRoomRequest, base?: string) {
 
 export function joinRoom(code: string, req: JoinRoomRequest, base?: string) {
 	return rpc<JoinRoomResponse>('POST', `/api/rooms/${code}/join`, req, base);
+}
+
+export function spectateRoom(code: string, req: SpectateRoomRequest, base?: string) {
+	return rpc<SpectateRoomResponse>('POST', `/api/rooms/${code}/spectate`, req, base);
 }
 
 export function roomInfo(code: string, base?: string) {

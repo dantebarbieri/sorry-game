@@ -6,7 +6,7 @@ use tokio::sync::{Mutex, broadcast};
 
 use sorry_core::{ActionNeeded, InteractiveGame, PlayerAction, PlayerId, PlayerView};
 
-use crate::messages::{LobbyPlayer, PlayerSlotType, RoomLobbyState, ServerMessage};
+use crate::messages::{LobbyPlayer, LobbySpectator, PlayerSlotType, RoomLobbyState, ServerMessage};
 use crate::session::SessionToken;
 use crate::strategies::{available_rules, available_strategies, make_rules, make_strategy};
 
@@ -19,6 +19,15 @@ pub enum RoomPhase {
     Lobby,
     InGame,
     GameOver,
+}
+
+/// Target of a broadcast. Seated players are addressed individually so each
+/// can receive their own redacted view; spectators share the observer view
+/// and always receive the same message, so they're addressed collectively.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BroadcastTarget {
+    Player(usize),
+    AllSpectators,
 }
 
 #[derive(Debug, Clone)]
@@ -42,6 +51,14 @@ impl PlayerSlot {
     }
 }
 
+#[derive(Debug, Clone)]
+pub struct Spectator {
+    pub name: String,
+    pub session_token: SessionToken,
+    pub connected: bool,
+    pub disconnected_at: Option<Instant>,
+}
+
 pub struct Room {
     pub code: String,
     pub phase: RoomPhase,
@@ -49,9 +66,10 @@ pub struct Room {
     pub rules_name: String,
     pub creator: usize,
     pub players: Vec<PlayerSlot>,
+    pub spectators: Vec<Spectator>,
     pub game: Option<InteractiveGame>,
     pub last_activity: Instant,
-    pub broadcast_tx: broadcast::Sender<(usize, ServerMessage)>,
+    pub broadcast_tx: broadcast::Sender<(BroadcastTarget, ServerMessage)>,
     pub last_winners: Vec<usize>,
     pub turn_timer_secs: Option<u64>,
     pub turn_start: Option<Instant>,
@@ -88,6 +106,7 @@ impl Room {
             rules_name,
             creator: 0,
             players,
+            spectators: Vec::new(),
             game: None,
             last_activity: Instant::now(),
             broadcast_tx,
@@ -232,7 +251,7 @@ impl Room {
             .map(|t| t.to_string());
 
         let _ = self.broadcast_tx.send((
-            slot,
+            BroadcastTarget::Player(slot),
             ServerMessage::Kicked {
                 reason: "You were kicked by the room host".to_string(),
             },
@@ -296,7 +315,7 @@ impl Room {
             {
                 let token = self.players[i].session_token.as_ref().map(|t| t.to_string());
                 let _ = self.broadcast_tx.send((
-                    i,
+                    BroadcastTarget::Player(i),
                     ServerMessage::Kicked {
                         reason: "Disconnected for too long".to_string(),
                     },
@@ -309,6 +328,31 @@ impl Room {
             self.touch();
         }
         kicked
+    }
+
+    /// Reap spectators whose disconnect exceeds `timeout`. Returns the
+    /// session tokens to expire. Safe to call in any phase (spectators can
+    /// come and go freely).
+    pub fn auto_kick_disconnected_spectators(
+        &mut self,
+        timeout: Duration,
+    ) -> Vec<String> {
+        let mut expired: Vec<(usize, String)> = Vec::new();
+        for (i, s) in self.spectators.iter().enumerate() {
+            if let Some(dc_at) = s.disconnected_at
+                && dc_at.elapsed() >= timeout
+            {
+                expired.push((i, s.session_token.to_string()));
+            }
+        }
+        // Remove highest-index-first so earlier indices stay valid.
+        for (i, _) in expired.iter().rev() {
+            self.spectators.remove(*i);
+        }
+        if !expired.is_empty() {
+            self.touch();
+        }
+        expired.into_iter().map(|(_, t)| t).collect()
     }
 
     pub fn all_slots_filled(&self) -> bool {
@@ -526,6 +570,18 @@ impl Room {
             })
             .collect();
 
+        let spectators: Vec<LobbySpectator> = self
+            .spectators
+            .iter()
+            .enumerate()
+            .map(|(i, s)| LobbySpectator {
+                idx: i,
+                name: s.name.clone(),
+                connected: s.connected,
+                disconnect_secs: s.disconnected_at.map(|t| t.elapsed().as_secs()),
+            })
+            .collect();
+
         let idle_timeout_secs = if self.phase == RoomPhase::Lobby {
             Some(LOBBY_IDLE_TIMEOUT_SECS.saturating_sub(self.last_activity.elapsed().as_secs()))
         } else {
@@ -536,6 +592,7 @@ impl Room {
             room_code: self.code.clone(),
             phase: self.phase_label().to_string(),
             players,
+            spectators,
             num_players: self.num_players,
             rules: self.rules_name.clone(),
             creator: self.creator,
@@ -552,12 +609,18 @@ impl Room {
         for (i, slot) in self.players.iter().enumerate() {
             if slot.connected {
                 let _ = self.broadcast_tx.send((
-                    i,
+                    BroadcastTarget::Player(i),
                     ServerMessage::RoomState {
                         state: state.clone(),
                     },
                 ));
             }
+        }
+        if self.spectators.iter().any(|s| s.connected) {
+            let _ = self.broadcast_tx.send((
+                BroadcastTarget::AllSpectators,
+                ServerMessage::RoomState { state },
+            ));
         }
     }
 
@@ -571,13 +634,23 @@ impl Room {
             if slot.connected && matches!(slot.slot_type, PlayerSlotType::Human) {
                 let state = game.get_player_view(PlayerId(i as u8));
                 let _ = self.broadcast_tx.send((
-                    i,
+                    BroadcastTarget::Player(i),
                     ServerMessage::GameState {
                         state,
                         turn_deadline_secs: deadline,
                     },
                 ));
             }
+        }
+        if self.spectators.iter().any(|s| s.connected) {
+            let state = game.get_observer_view();
+            let _ = self.broadcast_tx.send((
+                BroadcastTarget::AllSpectators,
+                ServerMessage::GameState {
+                    state,
+                    turn_deadline_secs: deadline,
+                },
+            ));
         }
     }
 
@@ -605,8 +678,27 @@ impl Room {
                         turn_deadline_secs: deadline,
                     }
                 };
-                let _ = self.broadcast_tx.send((i, msg));
+                let _ = self.broadcast_tx.send((BroadcastTarget::Player(i), msg));
             }
+        }
+        if self.spectators.iter().any(|s| s.connected) {
+            let state = game.get_observer_view();
+            let msg = if is_bot {
+                ServerMessage::BotAction {
+                    player,
+                    action: action.clone(),
+                    state,
+                    turn_deadline_secs: deadline,
+                }
+            } else {
+                ServerMessage::ActionApplied {
+                    player,
+                    action: action.clone(),
+                    state,
+                    turn_deadline_secs: deadline,
+                }
+            };
+            let _ = self.broadcast_tx.send((BroadcastTarget::AllSpectators, msg));
         }
     }
 
@@ -619,7 +711,7 @@ impl Room {
             if slot.connected && matches!(slot.slot_type, PlayerSlotType::Human) {
                 let state = game.get_player_view(PlayerId(i as u8));
                 let _ = self.broadcast_tx.send((
-                    i,
+                    BroadcastTarget::Player(i),
                     ServerMessage::TimeoutAction {
                         player,
                         action: action.clone(),
@@ -628,5 +720,140 @@ impl Room {
                 ));
             }
         }
+        if self.spectators.iter().any(|s| s.connected) {
+            let state = game.get_observer_view();
+            let _ = self.broadcast_tx.send((
+                BroadcastTarget::AllSpectators,
+                ServerMessage::TimeoutAction {
+                    player,
+                    action: action.clone(),
+                    state,
+                },
+            ));
+        }
+    }
+
+    // ─── Role changes (Lobby phase) ──────────────────────────────────
+
+    /// Move the human at `from_slot` into `new_slot`. Old slot becomes
+    /// Empty; any Bot that occupied `new_slot` is discarded. Updates
+    /// `creator` if the caller was the creator. Lobby phase only.
+    pub fn take_slot(&mut self, from_slot: usize, new_slot: usize) -> Result<(), String> {
+        if self.phase != RoomPhase::Lobby {
+            return Err("Cannot change colors during game".to_string());
+        }
+        if from_slot >= self.num_players || new_slot >= self.num_players {
+            return Err("Invalid slot".to_string());
+        }
+        if from_slot == new_slot {
+            return Err("Already in that slot".to_string());
+        }
+        if !matches!(self.players[from_slot].slot_type, PlayerSlotType::Human) {
+            return Err("Only seated humans can change colors".to_string());
+        }
+        match self.players[new_slot].slot_type {
+            PlayerSlotType::Empty | PlayerSlotType::Bot { .. } => {}
+            PlayerSlotType::Human => {
+                return Err("Target color is taken by another player".to_string());
+            }
+        }
+        let moving = std::mem::replace(&mut self.players[from_slot], PlayerSlot::empty());
+        self.players[new_slot] = moving;
+        if self.creator == from_slot {
+            self.creator = new_slot;
+        }
+        self.touch();
+        Ok(())
+    }
+
+    /// Human at `from_slot` leaves the seat and joins the spectators list.
+    /// Their slot becomes Empty. If they were the creator, pick a new one
+    /// (falls back to the old seat staying creator-less until someone
+    /// joins, matching the existing auto_promote_host semantics).
+    pub fn become_spectator(&mut self, from_slot: usize) -> Result<String, String> {
+        if self.phase != RoomPhase::Lobby {
+            return Err("Cannot become spectator during game".to_string());
+        }
+        if from_slot >= self.num_players {
+            return Err("Invalid slot".to_string());
+        }
+        if !matches!(self.players[from_slot].slot_type, PlayerSlotType::Human) {
+            return Err("Only seated humans can become spectators".to_string());
+        }
+        let old = std::mem::replace(&mut self.players[from_slot], PlayerSlot::empty());
+        let token = old
+            .session_token
+            .clone()
+            .ok_or_else(|| "Seated player has no session".to_string())?;
+        let was_connected = old.connected;
+        self.spectators.push(Spectator {
+            name: old.name,
+            session_token: token.clone(),
+            connected: was_connected,
+            disconnected_at: None,
+        });
+        if self.creator == from_slot {
+            // Try to hand off to another still-connected human; if none,
+            // the old creator stays as the nominal creator until a rejoin
+            // — the ws handler's auto_promote_host will pick up from here.
+            self.auto_promote_host();
+        }
+        self.touch();
+        Ok(token.to_string())
+    }
+
+    /// Spectator at `spectator_idx` takes `new_slot` (must be Empty/Bot).
+    /// They are removed from the spectators list. Lobby phase only.
+    /// Returns the new player slot index.
+    pub fn spectator_take_slot(
+        &mut self,
+        spectator_idx: usize,
+        new_slot: usize,
+    ) -> Result<usize, String> {
+        if self.phase != RoomPhase::Lobby {
+            return Err("Cannot take a color during game".to_string());
+        }
+        if spectator_idx >= self.spectators.len() {
+            return Err("Invalid spectator".to_string());
+        }
+        if new_slot >= self.num_players {
+            return Err("Invalid slot".to_string());
+        }
+        match self.players[new_slot].slot_type {
+            PlayerSlotType::Empty | PlayerSlotType::Bot { .. } => {}
+            PlayerSlotType::Human => {
+                return Err("Color is taken by another player".to_string());
+            }
+        }
+        let spec = self.spectators.remove(spectator_idx);
+        self.players[new_slot] = PlayerSlot {
+            name: spec.name,
+            slot_type: PlayerSlotType::Human,
+            session_token: Some(spec.session_token),
+            connected: spec.connected,
+            disconnected_at: spec.disconnected_at,
+        };
+        self.touch();
+        Ok(new_slot)
+    }
+
+    /// Append a spectator; returns their index in `self.spectators`.
+    pub fn add_spectator(&mut self, name: String, token: SessionToken) -> usize {
+        self.spectators.push(Spectator {
+            name,
+            session_token: token,
+            connected: false,
+            disconnected_at: None,
+        });
+        self.touch();
+        self.spectators.len() - 1
+    }
+
+    /// Find the current vector index of a spectator by session token.
+    /// Returns None if the spectator has been reaped.
+    pub fn find_spectator(&self, token: &str) -> Option<usize> {
+        self.spectators
+            .iter()
+            .position(|s| s.session_token.as_str() == token)
     }
 }

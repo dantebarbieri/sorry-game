@@ -1,8 +1,15 @@
 use std::time::Duration;
 
-use sorry_server::lobby::Lobby;
+use sorry_server::lobby::{Lobby, SessionRef};
 use sorry_server::messages::PlayerSlotType;
 use sorry_server::room::RoomPhase;
+
+fn expect_player(session: SessionRef) -> (String, usize) {
+    match session {
+        SessionRef::Player { code, slot } => (code, slot),
+        SessionRef::Spectator { .. } => panic!("expected player session, got spectator"),
+    }
+}
 
 #[tokio::test]
 async fn create_room_issues_token_and_seats_creator() {
@@ -16,7 +23,7 @@ async fn create_room_issues_token_and_seats_creator() {
     assert_eq!(lobby.rooms.len(), 1);
 
     let session = lobby.get_session(&token.to_string()).expect("session");
-    assert_eq!(session, (code.clone(), 0));
+    assert_eq!(expect_player(session), (code.clone(), 0));
 
     let room = lobby.get_room(&code).expect("room").clone();
     let room = room.lock().await;
@@ -36,7 +43,7 @@ async fn join_room_fills_next_empty_slot() {
     assert_eq!(idx, 1);
 
     let session = lobby.get_session(&token.to_string()).expect("session");
-    assert_eq!(session, (code, 1));
+    assert_eq!(expect_player(session), (code, 1));
 }
 
 #[tokio::test]
