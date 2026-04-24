@@ -210,19 +210,27 @@ fn pass_move_is_surfaced_and_applied() {
 }
 
 #[test]
-fn player_view_hides_drawn_card_from_spectators() {
+fn player_view_exposes_drawn_card_to_every_viewer_in_standard_sorry() {
+    // In standard Sorry! (`hand_size == 0`) the drawn card is face-up and
+    // public — every viewer, including spectators and non-active players,
+    // sees it.
     let game = interactive_game(4, 42);
     let current = game.current_player();
     let spectator = PlayerId(if current.0 == 0 { 1 } else { 0 });
     let mine = game.get_player_view(current);
     let theirs = game.get_player_view(spectator);
+    let observer = game.get_observer_view();
     assert!(
         mine.drawn_card.is_some(),
         "current player should see their drawn card in their own PlayerView"
     );
-    assert!(
-        theirs.drawn_card.is_none(),
-        "spectator should not see the current player's drawn card"
+    assert_eq!(
+        theirs.drawn_card, mine.drawn_card,
+        "non-active players should see the same face-up drawn card"
+    );
+    assert_eq!(
+        observer.drawn_card, mine.drawn_card,
+        "spectators should see the face-up drawn card"
     );
 }
 

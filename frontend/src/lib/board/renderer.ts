@@ -26,6 +26,8 @@ import {
 } from './prefabs';
 import { cardLabel } from './cards';
 import { loadPieceGeometry, makePiece } from './assets';
+import { ActiveCardAnim, type EdgeSeat } from './active-card';
+import { edgeAzimuthForSide, edgePosition } from '$lib/play/seating';
 
 const BOARD_SCALE = 2.0; // maps [-1, 1] to world [-2, 2]
 const PAWNS_PER_PLAYER = 4;
@@ -96,9 +98,15 @@ export class BoardRenderer {
 	// across `setState` calls so a skin change or no-step refresh still
 	// colors the face correctly; reset to null on initial load / New Game.
 	private lastDiscardActor: number | null = null;
+	// True while the 3D active card is airborne between the edge and the
+	// discard pile. When set, `rebuildDeckDiscard` suppresses the discard
+	// top-face decal so the landing card isn't competing with an already-
+	// rendered copy of itself on top of the stack.
+	private activeCardInFlight = false;
 	private pieceLoadError: Error | null = null;
 	private userOrbitCallback: (() => void) | null = null;
 	private animator: Animator;
+	private activeCard: ActiveCardAnim;
 
 	constructor(canvas: HTMLCanvasElement, geometry: BoardGeometry, skin: BoardSkin) {
 		this.geometry = geometry;
@@ -109,6 +117,7 @@ export class BoardRenderer {
 			pawnY: PAWN_Y,
 			getMesh: (player, pawn) => this.pawnMeshes[player]?.[pawn] ?? null
 		});
+		this.activeCard = new ActiveCardAnim(this.scene, skin);
 
 		this.renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 		this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
@@ -218,12 +227,14 @@ export class BoardRenderer {
 		this.disposeGroup(this.boardStaticGroup);
 		this.buildStatic();
 		this.retintPawns();
+		this.activeCard.setSkin(skin);
 		if (this.previousState) this.rebuildDeckDiscard(this.previousState, this.lastDiscardActor);
 	}
 
 	setReducedMotion(v: boolean): void {
 		this.reducedMotion = v;
 		this.animator.setReducedMotion(v);
+		this.activeCard.setReducedMotion(v);
 	}
 
 	/**
@@ -378,15 +389,84 @@ export class BoardRenderer {
 					callbacks?.onDone?.();
 				}
 			});
+			this.driveActiveCard(prev, state);
 		} else {
 			// No animation requested — this is an initial load, New Game, or
 			// similar discontinuous state change. Invalidate any pending
 			// animations so their post-animation snap can't clobber us with
 			// a stale state.
 			this.animator.cancel();
+			this.activeCard.hide();
 			this.snapPawns(state);
+			// Even without a step, if the new state is mid-turn (e.g. game
+			// just loaded into a ChooseMove), spawn the card directly.
+			this.driveActiveCard(null, state);
 		}
 		this.previousState = state;
+	}
+
+	/**
+	 * Animate the 3D active-turn card across a state transition. The card
+	 * represents the face-up drawn card of whoever is currently `ChooseMove`-
+	 * pending. On new turns it flies up from the deck (flipping as it goes)
+	 * to the active player's edge; on commit it flies to the discard; on
+	 * GameOver or variant-rules `ChooseCard` it hides.
+	 */
+	private driveActiveCard(
+		prev: GameStateView | null,
+		next: GameStateView
+	): void {
+		const prevCM = chooseMoveFor(prev);
+		const nextCM = chooseMoveFor(next);
+
+		if (!nextCM) {
+			// Either GameOver or waiting on a variant-rules ChooseCard. In
+			// both cases the previous face-up card has been consumed; fly
+			// it to the discard (if it was shown) or just hide it.
+			if (prevCM) this.commitFlight();
+			else this.activeCard.hide();
+			return;
+		}
+
+		const sameAsPrev =
+			prevCM != null &&
+			prevCM.player === nextCM.player &&
+			prevCM.card === nextCM.card;
+		if (sameAsPrev) return;
+
+		// A genuinely new card is pending. If we had a previous card (extra
+		// turn chain → new draw, or another player's turn beginning), send
+		// the old one to the discard first.
+		if (prevCM) this.commitFlight();
+
+		const side = this.sideFor(next, nextCM.player);
+		const { x, z } = edgePosition(side);
+		const seat: EdgeSeat = { side, x, z, rotY: edgeAzimuthForSide(side) };
+		const label = cardLabel(nextCM.card) ?? nextCM.card;
+		const accent = this.skin.palette.players[side] ?? '#222';
+		this.activeCard.drawToEdge(seat, label, accent);
+	}
+
+	/**
+	 * Animate the active card to the discard pile, keeping the top-face
+	 * decal hidden while the flight is airborne so the landing is what
+	 * reveals the card to the table.
+	 */
+	private commitFlight(): void {
+		this.activeCard.flyToDiscard({
+			onStart: () => {
+				this.activeCardInFlight = true;
+				if (this.previousState) {
+					this.rebuildDeckDiscard(this.previousState, this.lastDiscardActor);
+				}
+			},
+			onDone: () => {
+				this.activeCardInFlight = false;
+				if (this.previousState) {
+					this.rebuildDeckDiscard(this.previousState, this.lastDiscardActor);
+				}
+			}
+		});
 	}
 
 	dispose(): void {
@@ -401,6 +481,7 @@ export class BoardRenderer {
 		this.disposeGroup(this.highlightsGroup);
 		this.disposeGroup(this.pickerGroup);
 		this.disposeGroup(this.deckDiscardGroup);
+		this.activeCard.dispose();
 		this.pickerDisks.clear();
 		this.platformMeshes.clear();
 		this.pawnMeshes = [];
@@ -534,11 +615,14 @@ export class BoardRenderer {
 			const label = cardLabel(topRaw);
 			const actorColor =
 				actor != null ? this.skin.palette.players[this.sideFor(state, actor)] : undefined;
+			// Hide the top-of-discard face while the active card is airborne
+			// — the landing card is what reveals the played card to the table.
+			const showTop = !this.activeCardInFlight;
 			const discard = discardStack(
 				this.skin,
 				state.discard.length,
-				label ?? null,
-				actorColor
+				showTop ? (label ?? null) : null,
+				showTop ? actorColor : undefined
 			);
 			discard.position.x = 0.18;
 			discard.position.z = 0;
@@ -711,4 +795,17 @@ export class BoardRenderer {
 			this.rafId = null;
 		}
 	}
+}
+
+/** Snapshot of the pending `ChooseMove` in a game state, or null when the
+ *  engine is awaiting something else (`ChooseCard`, `GameOver`, or no
+ *  state at all). Used by `driveActiveCard` to diff turn transitions. */
+function chooseMoveFor(
+	state: GameStateView | null
+): { player: number; card: string } | null {
+	if (!state) return null;
+	if (state.winners.length > 0 || state.truncated) return null;
+	const an = state.action_needed;
+	if (an.type !== 'ChooseMove') return null;
+	return { player: an.player, card: an.card };
 }

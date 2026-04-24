@@ -11,8 +11,6 @@
 		gameState: GameStateView | null;
 		lastStep: StepCommand | undefined;
 		viewer: ViewerSeat;
-		stepping: boolean;
-		viewerCanMove: boolean;
 		pendingLeg1: SplitLeg | null;
 		lastAnnouncement: string;
 	}
@@ -22,7 +20,6 @@
 		gameState,
 		lastStep,
 		viewer,
-		viewerCanMove,
 		pendingLeg1,
 		lastAnnouncement
 	}: Props = $props();
@@ -73,12 +70,9 @@
 		return res;
 	});
 
-	const drawnCard = $derived.by(() => {
-		const s = gameState;
-		if (!s || s.winners.length > 0 || s.truncated) return null;
-		if (viewer !== null && s.current_player !== viewer) return null;
-		return s.drawn_card ? cardLabel(s.drawn_card) ?? s.drawn_card : null;
-	});
+	const isYourTurn = $derived(
+		!!gameState && viewer !== null && gameState.current_player === viewer
+	);
 </script>
 
 <div class="hud">
@@ -89,9 +83,9 @@
 				{lastPlayedLabel.label}
 			</span>
 		{/if}
-		{#if viewerCanMove && viewer !== null}
+		{#if isYourTurn && viewer !== null}
 			<span class="you-up" style:color={skin.palette.players[sideOf(viewer)]}>
-				Your turn ({drawnCard ?? '—'})
+				Your turn
 			</span>
 		{/if}
 		{#if pendingLeg1}
@@ -186,18 +180,36 @@
 	}
 	.seat-strip {
 		display: flex;
-		gap: 0.3rem;
+		gap: 0.35rem;
+		align-items: center;
 	}
 	.seat-dot {
 		width: 12px;
 		height: 12px;
 		border-radius: 50%;
-		opacity: 0.55;
+		opacity: 0.5;
+		transition: transform 220ms ease-out, opacity 220ms ease-out;
 	}
 	.seat-dot.current {
 		opacity: 1;
-		outline: 2px solid rgba(246, 196, 84, 0.7);
-		outline-offset: 1px;
+		transform: scale(1.45);
+		outline: 2px solid rgba(246, 196, 84, 0.75);
+		outline-offset: 2px;
+		animation: seat-pulse 1.6s ease-in-out infinite;
+	}
+	@keyframes seat-pulse {
+		0%,
+		100% {
+			box-shadow: 0 0 0 0 rgba(246, 196, 84, 0.6);
+		}
+		50% {
+			box-shadow: 0 0 0 5px rgba(246, 196, 84, 0);
+		}
+	}
+	@media (prefers-reduced-motion: reduce) {
+		.seat-dot.current {
+			animation: none;
+		}
 	}
 	.placements {
 		display: flex;

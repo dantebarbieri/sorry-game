@@ -2,7 +2,7 @@
 	import { onDestroy } from 'svelte';
 	import type { CameraCommand } from '$lib/board/BoardCanvas.svelte';
 	import type { CameraView } from '$lib/board/renderer';
-	import { passIsLegal } from '$lib/board/selection';
+	import { onlyPassIsLegal, passIsLegal } from '$lib/board/selection';
 	import type { ActionNeeded, SplitLeg } from '$lib/board/actions';
 	import { LocalController } from '$lib/play/local-controller.svelte';
 	import { OnlineController } from '$lib/play/online-controller.svelte';
@@ -11,12 +11,14 @@
 		type PlayController,
 		type ViewerSeat
 	} from '$lib/play/types';
+	import { edgeAzimuthForSide } from '$lib/play/seating';
 	import { useTheme } from '$lib/theme-context.svelte';
 	import LocalPreGame from '$lib/components/play/LocalPreGame.svelte';
 	import Hud from '$lib/components/play/Hud.svelte';
 	import PlayControls from '$lib/components/play/PlayControls.svelte';
 	import InteractiveBoard from '$lib/components/play/InteractiveBoard.svelte';
 	import OnlineLobby from '$lib/components/play/OnlineLobby.svelte';
+	import ActiveTurnCard from '$lib/components/play/ActiveTurnCard.svelte';
 
 	const theme = useTheme();
 	const local = new LocalController();
@@ -39,11 +41,6 @@
 		online.disconnect();
 	});
 
-	function edgeAzimuthForSide(side: number): number {
-		const map = [Math.PI, Math.PI / 2, 0, -Math.PI / 2];
-		return map[side] ?? 0;
-	}
-
 	/** Rotate the camera to the given engine player's board side. */
 	function rotateCameraTo(engineIdx: ViewerSeat) {
 		if (engineIdx === null) return;
@@ -61,6 +58,11 @@
 
 	// Hotseat viewer rotation — only relevant locally. Online, the server
 	// decides whose turn it is and the viewer is fixed to the client's seat.
+	//
+	// When auto-pass is on and the current player's only legal move is
+	// Pass, skip the rotation: the turn is about to bounce to the next
+	// player anyway, and a spin-per-forced-pass was disorienting. Let the
+	// camera settle on whoever actually has a real decision to make.
 	$effect(() => {
 		if (mode !== 'local') return;
 		const s = local.gameState;
@@ -73,6 +75,7 @@
 		if (humanEngineIdxs.length <= 1) return;
 		const an = s.action_needed;
 		if (an.type !== 'ChooseMove' && an.type !== 'ChooseCard') return;
+		if (an.type === 'ChooseMove' && autoPass && onlyPassIsLegal(an.legal_moves)) return;
 		if (humanEngineIdxs.includes(an.player) && an.player !== viewer) {
 			viewer = an.player;
 			rotateCameraTo(viewer);
@@ -181,8 +184,6 @@
 			gameState={activeController.gameState}
 			lastStep={activeController.lastStep}
 			{viewer}
-			stepping={activeController.stepping}
-			{viewerCanMove}
 			{pendingLeg1}
 			{lastAnnouncement}
 		/>
@@ -205,19 +206,28 @@
 			onNewGame={onNewGame}
 			{onPickView}
 		/>
-		<InteractiveBoard
-			controller={activeController}
-			{viewer}
-			skin={theme.skin}
-			{autoStep}
-			{autoPass}
-			{preferSwap11}
-			{cameraCommand}
-			{onCameraOrbit}
-			onAnnouncement={(text) => (lastAnnouncement = text)}
-			bind:pendingLeg1
-			bind:selectedPawn
-		/>
+		<div class="board-area">
+			<InteractiveBoard
+				controller={activeController}
+				{viewer}
+				skin={theme.skin}
+				{autoStep}
+				{autoPass}
+				{preferSwap11}
+				{cameraCommand}
+				{onCameraOrbit}
+				onAnnouncement={(text) => (lastAnnouncement = text)}
+				bind:pendingLeg1
+				bind:selectedPawn
+			/>
+			<ActiveTurnCard
+				skin={theme.skin}
+				gameState={activeController.gameState}
+				{viewer}
+				stepping={activeController.stepping}
+				{pendingLeg1}
+			/>
+		</div>
 	{/if}
 </div>
 
@@ -235,6 +245,12 @@
 		display: flex;
 		flex-direction: column;
 		flex: 1;
+		min-height: 0;
+	}
+	.board-area {
+		position: relative;
+		display: flex;
+		flex: 1 1 0;
 		min-height: 0;
 	}
 	.tabs {

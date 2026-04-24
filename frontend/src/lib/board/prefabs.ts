@@ -236,22 +236,33 @@ export function discardStack(
 	return group;
 }
 
-function cardFacePlane(label: string, color: string): THREE.Mesh {
+/**
+ * A face-down card back drawn on a thin plane. Matches `cardFacePlane`'s
+ * size so flipping between back and face can animate without a size pop.
+ * Used by the active-turn card during its "drawn from deck" flip.
+ */
+export function cardBackPlane(skin: BoardSkin): THREE.Mesh {
 	const canvas = document.createElement('canvas');
 	canvas.width = 256;
 	canvas.height = 360;
 	const ctx = canvas.getContext('2d');
 	if (ctx) {
-		ctx.fillStyle = '#FBF6E7';
+		const base = new THREE.Color(skin.palette.board).multiplyScalar(0.55);
+		const baseCss = `#${base.getHexString()}`;
+		const accent = new THREE.Color(skin.palette.board).multiplyScalar(0.35);
+		const accentCss = `#${accent.getHexString()}`;
+		ctx.fillStyle = baseCss;
 		ctx.fillRect(0, 0, canvas.width, canvas.height);
-		ctx.strokeStyle = '#c7bda6';
+		ctx.strokeStyle = accentCss;
 		ctx.lineWidth = 8;
 		ctx.strokeRect(4, 4, canvas.width - 8, canvas.height - 8);
-		ctx.fillStyle = color;
-		ctx.textAlign = 'center';
-		ctx.textBaseline = 'middle';
-		ctx.font = `bold ${label.length > 3 ? 96 : 180}px system-ui, sans-serif`;
-		ctx.fillText(label, canvas.width / 2, canvas.height / 2);
+		ctx.lineWidth = 14;
+		ctx.beginPath();
+		ctx.moveTo(30, 30);
+		ctx.lineTo(canvas.width - 30, canvas.height - 30);
+		ctx.moveTo(canvas.width - 30, 30);
+		ctx.lineTo(30, canvas.height - 30);
+		ctx.stroke();
 	}
 	const texture = new THREE.CanvasTexture(canvas);
 	texture.colorSpace = THREE.SRGBColorSpace;
@@ -259,6 +270,71 @@ function cardFacePlane(label: string, color: string): THREE.Mesh {
 	const geom = new THREE.PlaneGeometry(DECK_WIDTH * 0.92, DECK_DEPTH * 0.92);
 	geom.rotateX(-Math.PI / 2);
 	const mat = new THREE.MeshBasicMaterial({ map: texture, transparent: false });
+	return new THREE.Mesh(geom, mat);
+}
+
+/**
+ * A face-up card decal drawn on a thin plane. Cream body, colored label,
+ * matching border. Reused by the discard top-face and by the active-turn
+ * card mesh so both share a visual vocabulary.
+ *
+ * Geometry is rotated so the face points up (+Y). Width/depth are sized to
+ * match `DECK_WIDTH` / `DECK_DEPTH` so stacking the face directly on a
+ * deck/discard box looks flush.
+ */
+export function cardFacePlane(label: string, color: string): THREE.Mesh {
+	const canvas = document.createElement('canvas');
+	canvas.width = 256;
+	canvas.height = 360;
+	const ctx = canvas.getContext('2d');
+	if (ctx) {
+		// Rounded-rect card body: cream fill, colored border matching the
+		// active player. Transparent background outside the rounded rect
+		// makes the corners round visually (rather than sit on a square
+		// cream card).
+		const pad = 10;
+		const radius = 28;
+		ctx.clearRect(0, 0, canvas.width, canvas.height);
+		ctx.fillStyle = '#FBF6E7';
+		ctx.strokeStyle = color;
+		ctx.lineWidth = 12;
+		ctx.lineJoin = 'round';
+		ctx.beginPath();
+		ctx.roundRect(pad, pad, canvas.width - 2 * pad, canvas.height - 2 * pad, radius);
+		ctx.fill();
+		ctx.stroke();
+
+		ctx.fillStyle = color;
+		ctx.textAlign = 'center';
+		ctx.textBaseline = 'middle';
+		const isSorry = label === 'Sorry!';
+		if (isSorry) {
+			// Diagonal "Sorry!" runs bottom-left → top-right of the card.
+			// Canvas y is inverted, so rotating by -60° in canvas = 60°
+			// counterclockwise in math y-up.
+			ctx.save();
+			ctx.translate(canvas.width / 2, canvas.height / 2);
+			ctx.rotate(-Math.PI / 3);
+			ctx.font = 'bold 96px system-ui, sans-serif';
+			ctx.fillText(label, 0, 0);
+			ctx.restore();
+		} else {
+			ctx.font = `bold ${label.length > 2 ? 140 : 200}px system-ui, sans-serif`;
+			ctx.fillText(label, canvas.width / 2, canvas.height / 2);
+		}
+	}
+	const texture = new THREE.CanvasTexture(canvas);
+	texture.colorSpace = THREE.SRGBColorSpace;
+	texture.needsUpdate = true;
+	const geom = new THREE.PlaneGeometry(DECK_WIDTH * 0.92, DECK_DEPTH * 0.92);
+	geom.rotateX(-Math.PI / 2);
+	// `alphaTest` keeps the rounded-corner transparent pixels from rendering
+	// as opaque cream against the deck/discard box underneath.
+	const mat = new THREE.MeshBasicMaterial({
+		map: texture,
+		transparent: true,
+		alphaTest: 0.05
+	});
 	return new THREE.Mesh(geom, mat);
 }
 

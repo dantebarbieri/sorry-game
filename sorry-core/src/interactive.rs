@@ -91,8 +91,11 @@ pub struct InteractiveGameState {
     pub seat_sides: Vec<u8>,
 }
 
-/// Per-player snapshot — hides other players' persistent hands and the
-/// current player's drawn card from spectators.
+/// Per-player snapshot — hides other players' persistent hands from
+/// spectators. In variant rules (`Rules::hand_size() > 0`) the drawn card
+/// enters the current player's hand and is only visible via their own
+/// `hands[viewer]` slot. In standard Sorry! (`hand_size() == 0`) the drawn
+/// card is face-up and public, so `drawn_card` is exposed to every viewer.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerView {
     pub viewer: PlayerId,
@@ -104,8 +107,9 @@ pub struct PlayerView {
     pub deck_remaining: usize,
     /// `hands[p]` is `Some` only for `p == viewer`.
     pub hands: Vec<Option<Vec<Card>>>,
-    /// `Some` only when the viewer is the current player and a card has been
-    /// drawn face-up but not yet played.
+    /// `Some` when a card has been drawn face-up but not yet played in a
+    /// `hand_size == 0` game. Public information — visible to all viewers,
+    /// including spectators. Always `None` for variant rules.
     pub drawn_card: Option<Card>,
     pub rules_name: String,
     pub strategy_names: Vec<String>,
@@ -381,10 +385,12 @@ impl InteractiveGame {
     }
 
     fn redacted_view(&self, viewer: Option<PlayerId>) -> PlayerView {
-        let drawn_card = match viewer {
-            Some(v) if v == self.current => self.current_drawn_card_if_faceup(),
-            _ => None,
-        };
+        // The face-up drawn card is public information in standard Sorry!
+        // (`hand_size == 0`); every viewer sees it. In variant rules the
+        // drawn card is already absorbed into the current player's hand and
+        // `current_drawn_card_if_faceup` returns `None`, so redaction there
+        // happens via the per-player `hands` slot below.
+        let drawn_card = self.current_drawn_card_if_faceup();
         let hands: Vec<Option<Vec<Card>>> = self
             .hands
             .iter()
