@@ -1,0 +1,11 @@
+# Pinned tool versions for local development.
+#
+# Runtime versions for the frontend; the Rust toolchain is pinned
+# separately in rust-toolchain.toml (cargo's canonical mechanism).
+#
+# Bootstrap: `mise install` from the repo root.
+# Update:    `mise use node@<version>` / `mise use pnpm@<version>`.
+
+[tools]
+node = "22"
+pnpm = "11"
