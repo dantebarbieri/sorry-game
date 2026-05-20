@@ -43,7 +43,11 @@ Uses SvelteKit (not React) and pnpm. For prior-art on the crate layout, WASM bri
 
 ### Development
 
-Prerequisites: [Rust](https://rustup.rs/), [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/), [Node.js ≥ 22](https://nodejs.org/), and [pnpm](https://pnpm.io/).
+Prerequisites:
+
+- [Rust](https://rustup.rs/) — `rust-toolchain.toml` pins the channel and the `wasm32-unknown-unknown` target; `rustup`/`cargo` will install them on first invocation.
+- [wasm-pack](https://rustwasm.github.io/wasm-pack/installer/) — `cargo install --locked wasm-pack`.
+- [mise](https://mise.jdx.dev/) — `mise.toml` pins Node.js and pnpm; run `mise install` from the repo root to fetch the pinned versions.
 
 1. **Build the WASM module**
 

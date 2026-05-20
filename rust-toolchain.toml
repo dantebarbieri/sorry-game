@@ -1,0 +1,13 @@
+# Pinned Rust toolchain for the workspace.
+#
+# Includes wasm32-unknown-unknown for sorry-wasm and clippy/rustfmt
+# so `cargo clippy -- -D warnings` and `cargo fmt` work out of the box.
+#
+# Bootstrap is automatic: cargo / rustup read this file and install
+# the toolchain on first invocation in the repo.
+
+[toolchain]
+channel = "stable"
+components = ["clippy", "rustfmt"]
+targets = ["wasm32-unknown-unknown"]
+profile = "minimal"
