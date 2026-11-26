@@ -44,7 +44,10 @@ ENV VITE_SERVER_URL=${VITE_SERVER_URL}
 
 RUN pnpm build
 
-FROM nginx:1.27-alpine AS runtime
+# Track nginx's maintained *stable* branch. Odd-numbered mainline branches
+# go end-of-life (no security fixes) as soon as the next one ships; bump to
+# the next even branch when nginx releases a new stable line.
+FROM nginx:1.30-alpine AS runtime
 RUN rm -rf /usr/share/nginx/html/* \
     && apk add --no-cache wget
 COPY --from=frontend /app/build/ /usr/share/nginx/html/
